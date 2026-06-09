@@ -1,0 +1,238 @@
+import { Client, IMessage, StompSubscription } from '@stomp/stompjs';
+import SockJS from 'sockjs-client';
+import type { CollabMessage, OnlineUser, UUID } from '@/types';
+import { useCanvasStore } from '@/store/canvasStore';
+import { uid } from '@/utils';
+
+export interface OpHandlers {
+  onAck?: (opId: string, success: boolean, result?: any, error?: string) => void;
+  onPresence?: (type: 'JOIN' | 'LEAVE', user: OnlineUser, all: OnlineUser[]) => void;
+  onCursor?: (userId: string, x: number, y: number) => void;
+  onSelection?: (userId: string, selection: string[]) => void;
+  onRemoteOp?: (msg: CollabMessage) => void;
+}
+
+export class CollabClient {
+  private client: Client | null = null;
+  private canvasId: string | null = null;
+  private subscriptions: StompSubscription[] = [];
+  private handlers: OpHandlers = {};
+  private connected = false;
+  private token: string | null = null;
+  private reconnectAttempts = 0;
+  private maxReconnect = 10;
+
+  setHandlers(handlers: Partial<OpHandlers>) {
+    this.handlers = { ...this.handlers, ...handlers };
+  }
+
+  connect(canvasId: string, token: string | null = null): Promise<void> {
+    this.canvasId = canvasId;
+    this.token = token || localStorage.getItem('collab_token');
+    this.reconnectAttempts = 0;
+
+    return new Promise((resolve, reject) => {
+      const wsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
+      const httpUrl = `${window.location.origin}/ws`;
+
+      const brokerURL = this.token ? `${wsUrl}?token=${encodeURIComponent(this.token)}` : wsUrl;
+
+      this.client = new Client({
+        brokerURL,
+        connectHeaders: this.token ? { Authorization: `Bearer ${this.token}` } : {},
+        webSocketFactory: () => {
+          return new SockJS(this.token
+            ? `${httpUrl}?token=${encodeURIComponent(this.token)}`
+            : httpUrl);
+        },
+        reconnectDelay: 3000,
+        heartbeatIncoming: 10000,
+        heartbeatOutgoing: 10000,
+        onConnect: () => {
+          console.log('[Collab] Connected to canvas:', canvasId);
+          this.connected = true;
+          this.reconnectAttempts = 0;
+          this.setupSubscriptions();
+          resolve();
+        },
+        onStompError: (frame) => {
+          console.error('[Collab] STOMP error:', frame);
+          reject(new Error(frame.headers?.message || 'STOMP error'));
+        },
+        onDisconnect: () => {
+          console.log('[Collab] Disconnected');
+          this.connected = false;
+          this.reconnectAttempts++;
+        },
+        onWebSocketClose: () => {
+          console.log('[Collab] WS close');
+          this.connected = false;
+        },
+        onWebSocketError: (err) => {
+          console.error('[Collab] WS error:', err);
+        },
+        debug: (str) => {
+          if (str.includes('error') || str.includes('Error')) {
+            console.debug('[Collab debug]', str);
+          }
+        },
+      });
+
+      try {
+        this.client.activate();
+      } catch (e) {
+        reject(e);
+      }
+    });
+  }
+
+  private setupSubscriptions() {
+    if (!this.client || !this.canvasId) return;
+    this.subscriptions.forEach(s => { try { s.unsubscribe(); } catch {} });
+    this.subscriptions = [];
+
+    const cid = this.canvasId;
+
+    this.subscriptions.push(
+      this.client.subscribe(`/topic/canvas/${cid}/operations`, (msg: IMessage) => {
+        try {
+          const parsed: CollabMessage = JSON.parse(msg.body);
+          const store = useCanvasStore.getState();
+          if (parsed.userId && parsed.userId !== store.currentUser?.id) {
+            store.applyRemoteOp(parsed);
+            this.handlers.onRemoteOp?.(parsed);
+          }
+        } catch (e) {
+          console.error('Parse op error', e);
+        }
+      })
+    );
+
+    this.subscriptions.push(
+      this.client.subscribe(`/topic/canvas/${cid}/presence`, (msg: IMessage) => {
+        try {
+          const parsed = JSON.parse(msg.body);
+          const store = useCanvasStore.getState();
+          if (parsed.type === 'JOIN' && parsed.allUsers) {
+            store.setOnlineUsers(parsed.allUsers);
+          } else if (parsed.type === 'LEAVE' && parsed.user?.userId) {
+            store.removeOnlineUser(parsed.user.userId);
+          }
+          this.handlers.onPresence?.(parsed.type, parsed.user, parsed.allUsers || []);
+        } catch (e) {
+          console.error('Parse presence error', e);
+        }
+      })
+    );
+
+    this.subscriptions.push(
+      this.client.subscribe(`/topic/canvas/${cid}/cursors`, (msg: IMessage) => {
+        try {
+          const parsed = JSON.parse(msg.body);
+          const store = useCanvasStore.getState();
+          if (parsed.userId !== store.currentUser?.id) {
+            store.setRemoteCursor(parsed.userId, parsed.x, parsed.y);
+            this.handlers.onCursor?.(parsed.userId, parsed.x, parsed.y);
+          }
+        } catch (e) {}
+      })
+    );
+
+    this.subscriptions.push(
+      this.client.subscribe(`/topic/canvas/${cid}/selections`, (msg: IMessage) => {
+        try {
+          const parsed = JSON.parse(msg.body);
+          const store = useCanvasStore.getState();
+          if (parsed.userId !== store.currentUser?.id) {
+            store.setRemoteSelection(parsed.userId, parsed.selection || []);
+            this.handlers.onSelection?.(parsed.userId, parsed.selection || []);
+          }
+        } catch (e) {}
+      })
+    );
+
+    if (this.token) {
+      const myId = useCanvasStore.getState().currentUser?.id;
+      if (myId) {
+        this.subscriptions.push(
+          this.client.subscribe(`/user/queue/canvas/${cid}/ack`, (msg: IMessage) => {
+            try {
+              const parsed = JSON.parse(msg.body);
+              const store = useCanvasStore.getState();
+              store.removePendingOp(parsed.opId);
+              this.handlers.onAck?.(parsed.opId, parsed.success, parsed.result, parsed.error);
+            } catch (e) {}
+          })
+        );
+      }
+    }
+  }
+
+  disconnect() {
+    this.subscriptions.forEach(s => { try { s.unsubscribe(); } catch {} });
+    this.subscriptions = [];
+    if (this.client) {
+      try { this.client.deactivate(); } catch {}
+      this.client = null;
+    }
+    this.connected = false;
+  }
+
+  isConnected(): boolean {
+    return this.connected && this.client?.connected === true;
+  }
+
+  sendOperation(type: string, payload: Record<string, any>): string {
+    const opId = uid();
+    const msg: CollabMessage = {
+      opId,
+      type,
+      timestamp: Date.now(),
+      payload,
+    };
+
+    const store = useCanvasStore.getState();
+    if (store.currentUser?.id) {
+      msg.userId = store.currentUser.id;
+    }
+
+    if (this.isConnected() && this.client) {
+      store.addPendingOp(opId, msg);
+      this.client.publish({
+        destination: `/app/canvas/${this.canvasId}/op`,
+        body: JSON.stringify(msg),
+      });
+    }
+    return opId;
+  }
+
+  sendCursor(x: number, y: number) {
+    if (!this.isConnected() || !this.client) return;
+    this.client.publish({
+      destination: `/app/canvas/${this.canvasId}/cursor`,
+      body: JSON.stringify({ x, y }),
+    });
+  }
+
+  sendSelection(selection: string[]) {
+    if (!this.isConnected() || !this.client) return;
+    this.client.publish({
+      destination: `/app/canvas/${this.canvasId}/selection`,
+      body: JSON.stringify({ selection }),
+    });
+  }
+
+  sendViewport(x: number, y: number, zoom: number) {
+    if (!this.isConnected() || !this.client) return;
+    this.client.publish({
+      destination: `/app/canvas/${this.canvasId}/viewport`,
+      body: JSON.stringify({ x, y, zoom }),
+    });
+  }
+
+  sendAutoSave() {
+    this.sendOperation('AUTO_SAVE', {});
+  }
+}
+
+export const collabClient = new CollabClient();
