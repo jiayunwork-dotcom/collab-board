@@ -88,6 +88,10 @@ public class CollaborationController {
 
         try {
             Object result = processOperation(canvasId, userId, message);
+            Map<String, Object> authoritativePayload = buildAuthoritativePayload(message.getType(), result, message.getPayload());
+            if (authoritativePayload != null) {
+                message.setPayload(authoritativePayload);
+            }
             broadcastOperation(canvasId, message);
             cacheLastOperation(canvasId, message);
 
@@ -260,5 +264,41 @@ public class CollaborationController {
             }
         }
         return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> buildAuthoritativePayload(String type, Object result, Map<String, Object> original) {
+        if (result == null) return null;
+        try {
+            switch (type) {
+                case "CREATE_ELEMENT", "UPDATE_ELEMENT" -> {
+                    if (result instanceof com.collabboard.dto.CanvasElementDto dto) {
+                        Map<String, Object> m = objectMapper.convertValue(dto, Map.class);
+                        return m;
+                    }
+                }
+                case "BATCH_CREATE_ELEMENTS" -> {
+                    if (result instanceof java.util.List<?> list) {
+                        return Map.of("elements", list);
+                    }
+                }
+                case "CREATE_CONNECTION", "UPDATE_CONNECTION" -> {
+                    if (result instanceof com.collabboard.dto.CanvasConnectionDto dto) {
+                        return objectMapper.convertValue(dto, Map.class);
+                    }
+                }
+                case "DELETE_ELEMENT" -> {
+                    if (result instanceof java.util.Map<?, ?> m) {
+                        return (Map<String, Object>) m;
+                    }
+                }
+                case "BATCH_DELETE_ELEMENTS", "DELETE_CONNECTION" -> {
+                    if (result instanceof java.util.Map<?, ?> m) {
+                        return (Map<String, Object>) m;
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return original;
     }
 }

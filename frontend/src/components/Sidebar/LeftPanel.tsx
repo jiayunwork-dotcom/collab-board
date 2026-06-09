@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useCanvasStore } from '@/store/canvasStore';
-import type { Template, Version } from '@/types';
+import type { Template, Version, CanvasElement, CanvasConnection } from '@/types';
 import { templateApi, versionApi, canvasApi } from '@/api/client';
 import { useNavigate, useParams } from 'react-router-dom';
+import { lerp, uid } from '@/utils';
 
 type TabKey = 'users' | 'templates' | 'versions';
+type PlaybackSpeed = 'slow' | 'normal' | 'fast';
 
 const LeftPanel: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabKey>('users');
@@ -12,6 +14,12 @@ const LeftPanel: React.FC = () => {
   const [versions, setVersions] = useState<Version[]>([]);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
   const [loadingVersions, setLoadingVersions] = useState(false);
+  const [playbackIndex, setPlaybackIndex] = useState<number>(-1);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState<PlaybackSpeed>('normal');
+  const playbackAnimRef = useRef<number | null>(null);
+  const playbackDataRef = useRef<Array<{ elements: CanvasElement[]; connections: CanvasConnection[] }>>([]);
+  const playbackSnapshotsRef = useRef<Map<string, any>>(new Map());
   const navigate = useNavigate();
   const params = useParams<{ id: string }>();
 
@@ -235,25 +243,169 @@ const LeftPanel: React.FC = () => {
   const restoreVersion = async (version: Version) => {
     if (!canvasId) return;
     try {
-      const snapshot = await versionApi.getSnapshot(canvasId, version.id);
-      if (snapshot.elements) {
-        setElements(snapshot.elements.map((el: any) => ({
-          ...el,
-          data: el.data || {},
-          visible: el.visible !== false,
-          opacity: el.opacity ?? 1,
-          rotation: el.rotation ?? 0,
-          zIndex: el.zIndex ?? 0,
-          locked: el.locked === true,
-        })));
-      }
-      if (snapshot.connections) {
-        setConnections(snapshot.connections);
-      }
-      alert(`已恢复到版本 ${version.versionNumber}`);
+      await versionApi.restore(canvasId, version.id);
+      await loadVersions();
     } catch (e) {
       console.error('Restore version failed', e);
-      alert('恢复失败');
+      alert('恢复失败：' + (e as any)?.response?.data?.message || (e as Error).message);
+    }
+  };
+
+  const stopPlayback = useCallback(() => {
+    if (playbackAnimRef.current != null) {
+      cancelAnimationFrame(playbackAnimRef.current);
+      playbackAnimRef.current = null;
+    }
+    setIsPlaying(false);
+    setPlaybackIndex(-1);
+    playbackDataRef.current = [];
+    playbackSnapshotsRef.current.clear();
+  }, []);
+
+  useEffect(() => () => stopPlayback(), [stopPlayback]);
+
+  const applySnapshotToCanvas = (snap: any) => {
+    if (snap?.elements) {
+      setElements(snap.elements.map((el: any) => ({
+        ...el,
+        data: el.data || {},
+        visible: el.visible !== false,
+        opacity: el.opacity ?? 1,
+        rotation: el.rotation ?? 0,
+        zIndex: el.zIndex ?? 0,
+        locked: el.locked === true,
+      })));
+    }
+    if (snap?.connections) {
+      setConnections(snap.connections);
+    }
+  };
+
+  const buildInterpSnapshots = async (startIdx: number, endIdx: number) => {
+    const sorted = [...versions].sort((a, b) => a.versionNumber - b.versionNumber);
+    const slice = sorted.slice(startIdx, endIdx + 1);
+    const snaps = new Map<string, any>();
+    for (const v of slice) {
+      if (!playbackSnapshotsRef.current.has(v.id)) {
+        try {
+          const s = await versionApi.getSnapshot(canvasId!, v.id);
+          playbackSnapshotsRef.current.set(v.id, s);
+        } catch (e) {
+          console.error('Get snapshot failed', v.id, e);
+        }
+      }
+      snaps.set(v.id, playbackSnapshotsRef.current.get(v.id));
+    }
+    return { slice, snaps };
+  };
+
+  const animateBetweenSnapshots = (
+    snapA: any,
+    snapB: any,
+    duration: number,
+    onComplete: () => void
+  ) => {
+    const elsA = new Map<string, CanvasElement>((snapA?.elements || []).map((e: CanvasElement) => [e.id, e]));
+    const elsB = new Map<string, CanvasElement>((snapB?.elements || []).map((e: CanvasElement) => [e.id, e]));
+    const allIds = new Set<string>([...elsA.keys(), ...elsB.keys()]);
+
+    const frames: Array<{ elements: CanvasElement[]; connections: CanvasConnection[] }> = [];
+    const steps = Math.max(12, Math.floor(duration / 16));
+
+    const connsA: CanvasConnection[] = (snapB?.connections || snapA?.connections || []);
+
+    for (let f = 0; f <= steps; f++) {
+      const t = f / steps;
+      const interpolated: CanvasElement[] = [];
+      allIds.forEach((id: string) => {
+        const a = elsA.get(id);
+        const b = elsB.get(id);
+        if (a && b) {
+          interpolated.push({
+            ...b,
+            x: lerp(a.x ?? b.x ?? 0, b.x ?? a.x ?? 0, t),
+            y: lerp(a.y ?? b.y ?? 0, b.y ?? a.y ?? 0, t),
+            width: lerp(a.width ?? b.width ?? 0, b.width ?? a.width ?? 0, t),
+            height: lerp(a.height ?? b.height ?? 0, b.height ?? a.height ?? 0, t),
+            rotation: lerp(a.rotation ?? 0, b.rotation ?? 0, t),
+            opacity: lerp(a.opacity ?? 1, b.opacity ?? 1, t),
+            zIndex: b.zIndex ?? a.zIndex ?? 0,
+            data: { ...(a.data || {}), ...(b.data || {}) },
+            visible: b.visible !== false,
+            locked: b.locked === true,
+          } as CanvasElement);
+        } else if (b) {
+          const appear = Math.min(1, t * 2.5);
+          interpolated.push({ ...b, opacity: (b.opacity ?? 1) * appear } as CanvasElement);
+        } else if (a) {
+          const disappear = Math.max(0, 1 - t * 2.5);
+          interpolated.push({ ...a, opacity: (a.opacity ?? 1) * disappear } as CanvasElement);
+        }
+      });
+      frames.push({ elements: interpolated, connections: connsA });
+    }
+    playbackDataRef.current = frames;
+  };
+
+  const startPlayback = async (startVersion: Version) => {
+    if (!canvasId) return;
+    stopPlayback();
+    const sorted = [...versions].sort((a, b) => a.versionNumber - b.versionNumber);
+    const startIdx = sorted.findIndex(v => v.id === startVersion.id);
+    if (startIdx < 0) return;
+    const endIdx = sorted.length - 1;
+    if (startIdx >= endIdx) {
+      alert('此版本已是最新，无可回放操作');
+      return;
+    }
+    try {
+      const { slice, snaps } = await buildInterpSnapshots(startIdx, endIdx);
+      applySnapshotToCanvas(snaps.get(slice[0].id));
+      setIsPlaying(true);
+
+      const speedFactor = playbackSpeed === 'slow' ? 0.5 : playbackSpeed === 'fast' ? 2.5 : 1;
+      let frameIdx = 0;
+      let segmentStartVersion = 0;
+      const versionCount = slice.length - 1;
+
+      const runSegment = async (segIdx: number) => {
+        if (segIdx >= versionCount) {
+          stopPlayback();
+          const last = slice[slice.length - 1];
+          const snap = snaps.get(last.id);
+          if (snap) applySnapshotToCanvas(snap);
+          return;
+        }
+        const segDuration = 900 / speedFactor;
+        const snapA = snaps.get(slice[segIdx].id);
+        const snapB = snaps.get(slice[segIdx + 1].id);
+        animateBetweenSnapshots(snapA, snapB, segDuration, () => {});
+
+        const totalFrames = playbackDataRef.current.length;
+        const startTime = performance.now();
+        setPlaybackIndex(segIdx);
+
+        const tick = () => {
+          const elapsed = performance.now() - startTime;
+          const localProgress = Math.min(1, elapsed / segDuration);
+          const frameToShow = Math.min(totalFrames - 1, Math.floor(localProgress * (totalFrames - 1)));
+          if (frameToShow >= 0 && playbackDataRef.current[frameToShow]) {
+            const fd = playbackDataRef.current[frameToShow];
+            setElements(fd.elements);
+            setConnections(fd.connections);
+          }
+          if (localProgress >= 1) {
+            setTimeout(() => runSegment(segIdx + 1), 180);
+          } else {
+            playbackAnimRef.current = requestAnimationFrame(tick);
+          }
+        };
+        playbackAnimRef.current = requestAnimationFrame(tick);
+      };
+      runSegment(0);
+    } catch (e) {
+      console.error('Playback failed', e);
+      stopPlayback();
     }
   };
 
@@ -538,6 +690,58 @@ const LeftPanel: React.FC = () => {
               </div>
             ) : (
               <div className="space-y-2">
+                {(() => {
+                  if (!isPlaying) return null;
+                  const totalSteps = Math.max(1, versions.length - 1);
+                  const step = playbackIndex + 1;
+                  const pct = Math.max(5, Math.min(100, Math.round(100 * step / totalSteps))) + '%';
+                  return (
+                    <div className="mb-3 p-3 rounded-lg border border-amber-200 bg-amber-50 text-amber-800">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2 text-xs font-semibold">
+                          <svg className="w-4 h-4 animate-pulse" fill="currentColor" viewBox="0 0 24 24">
+                            <circle cx="12" cy="12" r="6" />
+                          </svg>
+                          回放中...版本 {step} / {totalSteps}
+                        </div>
+                        <button
+                          onClick={stopPlayback}
+                          className="text-xs hover:underline text-amber-900 font-medium"
+                        >
+                          停止
+                        </button>
+                      </div>
+                      <div className="w-full h-1.5 bg-amber-200 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-amber-600 rounded-full transition-all"
+                          style={{ width: pct }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {!isPlaying && versions.length >= 2 && (
+              <div className="mb-3 flex items-center gap-2 text-xs">
+                <span className="text-slate-500 whitespace-nowrap">回放速度：</span>
+                <div className="flex gap-1 flex-1">
+                  {(['slow', 'normal', 'fast'] as PlaybackSpeed[]).map(sp => (
+                    <button
+                      key={sp}
+                      onClick={() => setPlaybackSpeed(sp)}
+                      className={`flex-1 py-1 rounded transition-colors ${
+                        playbackSpeed === sp
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {sp === 'slow' ? '慢速' : sp === 'normal' ? '正常' : '快速'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
                 <button
                   className="w-full btn btn-primary btn-sm mb-3"
                   onClick={async () => {
@@ -560,7 +764,9 @@ const LeftPanel: React.FC = () => {
                   {versions.map((v, i) => (
                     <div key={v.id} className="relative mb-3 last:mb-0">
                       <div className={`absolute -left-2.5 top-2 w-3 h-3 rounded-full border-2 border-white ${i === 0 ? 'bg-indigo-600' : 'bg-slate-300'}`} />
-                      <div className="bg-white border border-slate-200 rounded-lg p-3 hover:shadow-sm hover:border-indigo-200 transition-all">
+                      <div className={`border border-slate-200 rounded-lg p-3 hover:shadow-sm hover:border-indigo-200 transition-all ${
+                        isPlaying && playbackIndex === i ? 'bg-indigo-50 border-indigo-400' : 'bg-white'
+                      }`}>
                         <div className="flex items-center justify-between mb-1">
                           <span className="text-xs font-semibold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full">
                             v{v.versionNumber}
@@ -570,21 +776,35 @@ const LeftPanel: React.FC = () => {
                         <div className="text-sm text-slate-700 mb-2 line-clamp-2">
                           {v.summary || '未命名版本'}
                         </div>
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-slate-500">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-slate-500">
                             {v.createdByName && <span>👤 {v.createdByName}</span>}
                             {v.branchName !== 'main' && <span className="ml-2">🌿 {v.branchName}</span>}
                           </span>
-                          <button
-                            className="text-indigo-600 hover:text-indigo-700 font-medium hover:underline"
-                            onClick={() => {
-                              if (confirm(`确定恢复到版本 v${v.versionNumber}？此操作会覆盖当前内容。`)) {
-                                restoreVersion(v);
-                              }
-                            }}
-                          >
-                            恢复
-                          </button>
+                          <div className="flex items-center gap-3 text-xs">
+                            {i < versions.length - 1 && !isPlaying && (
+                              <button
+                                className="text-slate-600 hover:text-slate-800 font-medium hover:underline flex items-center gap-0.5"
+                                onClick={() => startPlayback(v)}
+                                title="从该版本回放到最新"
+                              >
+                                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+                                  <path d="M8 5v14l11-7z" />
+                                </svg>
+                                回放
+                              </button>
+                            )}
+                            <button
+                              className="text-indigo-600 hover:text-indigo-700 font-medium hover:underline"
+                              onClick={() => {
+                                if (confirm(`确定恢复到版本 v${v.versionNumber}？此操作会覆盖当前内容。`)) {
+                                  restoreVersion(v);
+                                }
+                              }}
+                            >
+                              恢复
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>

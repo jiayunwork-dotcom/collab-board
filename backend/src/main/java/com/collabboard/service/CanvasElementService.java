@@ -191,26 +191,95 @@ public class CanvasElementService {
         connectionRepository.delete(conn);
     }
 
+    @SuppressWarnings("unchecked")
     private void applyLwwMerge(CanvasElement element, UUID userId, CanvasElementDto dto) {
-        long now = System.currentTimeMillis();
+        long opTs = dto.getOperationTimestamp() != null
+                ? dto.getOperationTimestamp()
+                : System.currentTimeMillis();
         String uid = userId.toString();
 
-        if (dto.getX() != null) element.setX(dto.getX());
-        if (dto.getY() != null) element.setY(dto.getY());
-        if (dto.getWidth() != null) element.setWidth(dto.getWidth());
-        if (dto.getHeight() != null) element.setHeight(dto.getHeight());
-        if (dto.getRotation() != null) element.setRotation(dto.getRotation());
-        if (dto.getZIndex() != null) element.setZIndex(dto.getZIndex());
-        if (dto.getOpacity() != null) element.setOpacity(dto.getOpacity());
-        if (dto.getLocked() != null) element.setLocked(dto.getLocked());
-        if (dto.getVisible() != null) element.setVisible(dto.getVisible());
-        if (dto.getParentId() != null) element.setParentId(dto.getParentId());
-        if (dto.getGroupId() != null) element.setGroupId(dto.getGroupId());
-        if (dto.getData() != null) element.setData(dto.getData());
+        Map<String, Object> vv = element.getVersionVector() != null
+                ? element.getVersionVector()
+                : new HashMap<>();
 
-        element.getVersionVector().merge(uid, now, (a, b) -> Math.max(((Number) a).longValue(), now));
+        Long existingTs = 0L;
+        Object et = vv.get(uid);
+        if (et instanceof Number n) existingTs = n.longValue();
+        Object globalMaxObj = vv.get("_global");
+        long globalMax = globalMaxObj instanceof Number n ? n.longValue() : 0L;
+
+        long effectiveTs = Math.max(Math.max(opTs, existingTs), globalMax + 1);
+
+        if (dto.getX() != null && shouldUpdateField(vv, "x", effectiveTs, uid)) {
+            element.setX(dto.getX());
+            vv.put("_f_x", effectiveTs);
+            vv.put("_f_x_by", uid);
+        }
+        if (dto.getY() != null && shouldUpdateField(vv, "y", effectiveTs, uid)) {
+            element.setY(dto.getY());
+            vv.put("_f_y", effectiveTs);
+            vv.put("_f_y_by", uid);
+        }
+        if (dto.getWidth() != null && shouldUpdateField(vv, "width", effectiveTs, uid)) {
+            element.setWidth(dto.getWidth());
+            vv.put("_f_w", effectiveTs);
+        }
+        if (dto.getHeight() != null && shouldUpdateField(vv, "height", effectiveTs, uid)) {
+            element.setHeight(dto.getHeight());
+            vv.put("_f_h", effectiveTs);
+        }
+        if (dto.getRotation() != null && shouldUpdateField(vv, "rotation", effectiveTs, uid)) {
+            element.setRotation(dto.getRotation());
+            vv.put("_f_r", effectiveTs);
+        }
+        if (dto.getZIndex() != null && shouldUpdateField(vv, "zIndex", effectiveTs, uid)) {
+            element.setZIndex(dto.getZIndex());
+            vv.put("_f_z", effectiveTs);
+        }
+        if (dto.getOpacity() != null && shouldUpdateField(vv, "opacity", effectiveTs, uid)) {
+            element.setOpacity(dto.getOpacity());
+            vv.put("_f_o", effectiveTs);
+        }
+        if (dto.getLocked() != null && shouldUpdateField(vv, "locked", effectiveTs, uid)) {
+            element.setLocked(dto.getLocked());
+            vv.put("_f_lk", effectiveTs);
+        }
+        if (dto.getVisible() != null && shouldUpdateField(vv, "visible", effectiveTs, uid)) {
+            element.setVisible(dto.getVisible());
+            vv.put("_f_vs", effectiveTs);
+        }
+        if (dto.getParentId() != null && shouldUpdateField(vv, "parentId", effectiveTs, uid)) {
+            element.setParentId(dto.getParentId());
+            vv.put("_f_pid", effectiveTs);
+        }
+        if (dto.getGroupId() != null && shouldUpdateField(vv, "groupId", effectiveTs, uid)) {
+            element.setGroupId(dto.getGroupId());
+            vv.put("_f_gid", effectiveTs);
+        }
+        if (dto.getData() != null && !dto.getData().isEmpty() && shouldUpdateField(vv, "data", effectiveTs, uid)) {
+            Map<String, Object> merged = new HashMap<>(element.getData() != null ? element.getData() : new HashMap<>());
+            merged.putAll(dto.getData());
+            element.setData(merged);
+            vv.put("_f_d", effectiveTs);
+        }
+
+        vv.merge(uid, effectiveTs, (a, b) -> Math.max(((Number) a).longValue(), ((Number) b).longValue()));
+        vv.put("_global", effectiveTs);
+        element.setVersionVector(vv);
         element.setLastModifiedBy(userId);
         element.setLastModifiedAt(OffsetDateTime.now());
+    }
+
+    private boolean shouldUpdateField(Map<String, Object> vv, String field, long incomingTs, String uid) {
+        Object tsObj = vv.get("_f_" + field);
+        long existingTs = tsObj instanceof Number n ? n.longValue() : 0L;
+        if (incomingTs > existingTs) return true;
+        if (incomingTs == existingTs) {
+            Object byObj = vv.get("_f_" + field + "_by");
+            String existingBy = byObj != null ? byObj.toString() : "";
+            return uid.compareTo(existingBy) > 0;
+        }
+        return false;
     }
 
     private void logOperation(UUID canvasId, UUID userId, String type, Object data) {

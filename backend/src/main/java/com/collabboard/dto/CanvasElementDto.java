@@ -34,4 +34,5 @@ public class CanvasElementDto {
     private UUID lastModifiedBy;
     private OffsetDateTime lastModifiedAt;
     private OffsetDateTime createdAt;
+    private Long operationTimestamp;
 }

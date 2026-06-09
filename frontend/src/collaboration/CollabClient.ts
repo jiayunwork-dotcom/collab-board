@@ -1,6 +1,6 @@
 import { Client, IMessage, StompSubscription } from '@stomp/stompjs';
 import SockJS from 'sockjs-client';
-import type { CollabMessage, OnlineUser, UUID } from '@/types';
+import type { CollabMessage, OnlineUser, UUID, CanvasElement, CanvasConnection } from '@/types';
 import { useCanvasStore } from '@/store/canvasStore';
 import { uid } from '@/utils';
 
@@ -160,8 +160,37 @@ export class CollabClient {
               const parsed = JSON.parse(msg.body);
               const store = useCanvasStore.getState();
               store.removePendingOp(parsed.opId);
+              if (parsed.success && parsed.result) {
+                const r = parsed.result;
+                if (r && r.id) {
+                  if (store.elements.has(r.id)) {
+                    store.updateElement(r.id, r as Partial<CanvasElement>);
+                  } else if (!store.modifyingIds.has(r.id)) {
+                    store.addElement(r as CanvasElement);
+                  }
+                }
+                if (r && r.fromElementId && r.toElementId) {
+                  if (store.connections.has(r.id)) {
+                    store.updateConnection(r.id, r as Partial<CanvasConnection>);
+                  } else {
+                    store.addConnection(r as CanvasConnection);
+                  }
+                }
+                if (r && Array.isArray(r.elements)) {
+                  const updates = (r.elements as CanvasElement[]);
+                  updates.forEach(e => {
+                    if (store.elements.has(e.id)) {
+                      store.updateElement(e.id, e);
+                    } else {
+                      store.addElement(e);
+                    }
+                  });
+                }
+              }
               this.handlers.onAck?.(parsed.opId, parsed.success, parsed.result, parsed.error);
-            } catch (e) {}
+            } catch (e) {
+              console.error('ACK parse error', e);
+            }
           })
         );
       }
@@ -184,11 +213,24 @@ export class CollabClient {
 
   sendOperation(type: string, payload: Record<string, any>): string {
     const opId = uid();
+    const ts = Date.now();
+
+    const stampedPayload = { ...payload };
+    if ((type === 'CREATE_ELEMENT' || type === 'UPDATE_ELEMENT') && stampedPayload.id) {
+      stampedPayload.operationTimestamp = ts;
+    }
+    if (type === 'BATCH_CREATE_ELEMENTS' && Array.isArray(stampedPayload.elements)) {
+      stampedPayload.elements = stampedPayload.elements.map((e: any) => ({ ...e, operationTimestamp: ts }));
+    }
+    if ((type === 'CREATE_CONNECTION' || type === 'UPDATE_CONNECTION') && stampedPayload.id) {
+      stampedPayload.operationTimestamp = ts;
+    }
+
     const msg: CollabMessage = {
       opId,
       type,
-      timestamp: Date.now(),
-      payload,
+      timestamp: ts,
+      payload: stampedPayload,
     };
 
     const store = useCanvasStore.getState();

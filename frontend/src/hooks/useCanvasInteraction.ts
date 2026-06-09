@@ -236,6 +236,7 @@ export function useCanvasInteraction(canvasRef: React.RefObject<HTMLCanvasElemen
               centerX: count ? sumX / count : worldX,
               centerY: count ? sumY / count : worldY,
             };
+            state.setModifyingIds(getExpandedSelection(state.selectedIds, state.elements));
             dragStartPos.current = { x: e.clientX, y: e.clientY, worldX, worldY };
             return;
           }
@@ -266,6 +267,10 @@ export function useCanvasInteraction(canvasRef: React.RefObject<HTMLCanvasElemen
           if (!el || el.locked) return;
           draggedElements.current.set(id, { origX: el.x, origY: el.y });
         });
+        state.setModifyingIds([...expanded].filter(id => {
+          const el = state.elements.get(id);
+          return el && !el.locked;
+        }));
         state.setIsDragging(true);
         return;
       }
@@ -687,6 +692,8 @@ export function useCanvasInteraction(canvasRef: React.RefObject<HTMLCanvasElemen
     dragStartPos.current = null;
     dragMoved.current = false;
     draggedElements.current.clear();
+    resizeStart.current = null;
+    state.setModifyingIds([]);
     state.setIsDragging(false);
   }, [canvasId, currentTool, getWorldCoords, sendOp, store]);
 

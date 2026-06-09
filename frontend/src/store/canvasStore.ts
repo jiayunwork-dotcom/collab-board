@@ -35,6 +35,9 @@ interface CanvasState {
   toggleSelected: (id: string, additive?: boolean) => void;
   clearSelection: () => void;
 
+  modifyingIds: Set<string>;
+  setModifyingIds: (ids: Set<string> | string[]) => void;
+
   currentTool: Tool;
   setCurrentTool: (t: Tool) => void;
 
@@ -179,6 +182,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   }),
   clearSelection: () => set({ selectedIds: new Set() }),
 
+  modifyingIds: new Set(),
+  setModifyingIds: (ids) => set({ modifyingIds: ids instanceof Set ? new Set(ids) : new Set(ids) }),
+
   currentTool: 'select',
   setCurrentTool: (t) => set({ currentTool: t }),
 
@@ -235,13 +241,35 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   }),
   applyRemoteOp: (msg) => {
     const { type, payload } = msg;
-    const { addElement, updateElement, deleteElement, addConnection, updateConnection, deleteConnection } = get();
+    const s = get();
+    const { addElement, addElements, updateElement, deleteElement, setElements, setConnections,
+      addConnection, updateConnection, deleteConnection } = s;
     switch (type) {
       case 'CREATE_ELEMENT':
-        if (payload && payload.id) addElement(payload as CanvasElement);
+        if (payload && payload.id) {
+          if (!s.elements.has(payload.id)) {
+            addElement(payload as CanvasElement);
+          } else {
+            updateElement(payload.id, payload as Partial<CanvasElement>);
+          }
+        }
+        break;
+      case 'BATCH_CREATE_ELEMENTS':
+        if (Array.isArray(payload?.elements)) {
+          const newEls = (payload.elements as CanvasElement[]).filter(e => !s.elements.has(e.id));
+          const updateEls = (payload.elements as CanvasElement[]).filter(e => s.elements.has(e.id));
+          if (newEls.length) addElements(newEls);
+          updateEls.forEach(e => updateElement(e.id, e));
+        }
         break;
       case 'UPDATE_ELEMENT':
-        if (payload && payload.id) updateElement(payload.id, payload as Partial<CanvasElement>);
+        if (payload && payload.id) {
+          if (s.modifyingIds.has(payload.id)) {
+            console.debug('[CRDT] skipping update for locally-modifying element', payload.id);
+          } else {
+            updateElement(payload.id, payload as Partial<CanvasElement>);
+          }
+        }
         break;
       case 'DELETE_ELEMENT':
         if (payload?.id) deleteElement(payload.id);
@@ -252,7 +280,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         }
         break;
       case 'CREATE_CONNECTION':
-        if (payload && payload.id) addConnection(payload as CanvasConnection);
+        if (payload && payload.id) {
+          if (!s.connections.has(payload.id)) addConnection(payload as CanvasConnection);
+          else updateConnection(payload.id, payload as Partial<CanvasConnection>);
+        }
         break;
       case 'UPDATE_CONNECTION':
         if (payload && payload.id) updateConnection(payload.id, payload as Partial<CanvasConnection>);
@@ -260,6 +291,25 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       case 'DELETE_CONNECTION':
         if (payload?.id) deleteConnection(payload.id);
         break;
+      case 'RESET_CANVAS': {
+        const snap = payload?.snapshot;
+        if (!snap) break;
+        if (Array.isArray(snap.elements)) {
+          setElements(snap.elements.map((el: any) => ({
+            ...el,
+            data: el.data || {},
+            visible: el.visible !== false,
+            opacity: el.opacity ?? 1,
+            rotation: el.rotation ?? 0,
+            zIndex: el.zIndex ?? 0,
+            locked: el.locked === true,
+          })));
+        }
+        if (Array.isArray(snap.connections)) {
+          setConnections(snap.connections);
+        }
+        break;
+      }
     }
   },
 
