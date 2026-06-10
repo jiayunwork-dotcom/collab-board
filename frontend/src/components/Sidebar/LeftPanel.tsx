@@ -4,8 +4,9 @@ import type { Template, Version, CanvasElement, CanvasConnection } from '@/types
 import { templateApi, versionApi, canvasApi } from '@/api/client';
 import { useNavigate, useParams } from 'react-router-dom';
 import { lerp, uid } from '@/utils';
+import PluginPanel from '@/components/Plugin/PluginPanel';
 
-type TabKey = 'users' | 'templates' | 'versions';
+type TabKey = 'users' | 'templates' | 'versions' | 'plugins';
 type PlaybackSpeed = 'slow' | 'normal' | 'fast';
 
 const LeftPanel: React.FC = () => {
@@ -462,6 +463,7 @@ const LeftPanel: React.FC = () => {
           { key: 'users' as const, label: '协作者', icon: 'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75' },
           { key: 'templates' as const, label: '模板', icon: 'M4 4h16v4H4zM4 12h16v8H4z' },
           { key: 'versions' as const, label: '版本', icon: 'M12 8v4l3 3M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z' },
+          { key: 'plugins' as const, label: '插件', icon: 'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z' },
         ] as const).map(tab => (
           <button
             key={tab.key}
@@ -813,6 +815,10 @@ const LeftPanel: React.FC = () => {
               </div>
             )}
           </div>
+        )}
+
+        {activeTab === 'plugins' && (
+          <PluginPanel />
         )}
       </div>
     </div>

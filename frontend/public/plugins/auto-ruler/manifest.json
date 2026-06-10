@@ -1,0 +1,10 @@
+{
+  "name": "auto-ruler",
+  "version": "1.0.0",
+  "author": "Collab Board Team",
+  "description": "自动显示选中元素之间的水平/垂直距离标注线",
+  "icon": "📏",
+  "category": "工具",
+  "permissions": ["canvas:read", "canvas:write"],
+  "entry": "/plugins/auto-ruler/index.js"
+}

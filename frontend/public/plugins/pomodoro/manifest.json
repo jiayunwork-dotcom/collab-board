@@ -1,0 +1,10 @@
+{
+  "name": "pomodoro",
+  "version": "1.0.0",
+  "author": "Collab Board Team",
+  "description": "在画布右上角显示25分钟倒计时器，计时结束发送浏览器通知",
+  "icon": "🍅",
+  "category": "效率",
+  "permissions": ["notification:send", "canvas:read", "canvas:write", "storage:local"],
+  "entry": "/plugins/pomodoro/index.js"
+}

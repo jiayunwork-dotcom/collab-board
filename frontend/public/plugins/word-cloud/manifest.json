@@ -1,0 +1,10 @@
+{
+  "name": "word-cloud",
+  "version": "1.0.0",
+  "author": "Collab Board Team",
+  "description": "读取画布所有文本元素，生成词云并创建新画布元素",
+  "icon": "☁️",
+  "category": "分析",
+  "permissions": ["canvas:read", "canvas:write"],
+  "entry": "/plugins/word-cloud/index.js"
+}

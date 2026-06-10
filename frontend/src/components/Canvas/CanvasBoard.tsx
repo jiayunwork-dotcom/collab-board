@@ -8,6 +8,7 @@ import { uid, clamp, pointInRect, getElementBBox, deepClone, throttle, debounce 
 import { screenToWorld, worldToScreen } from '@/canvas/geometry';
 import MiniMap from './MiniMap';
 import CommentLayer from './CommentLayer';
+import { pluginManager } from '@/plugin/PluginManager';
 
 const MAX_ZOOM = 10;
 const MIN_ZOOM = 0.1;
@@ -883,6 +884,91 @@ const CanvasBoard: React.FC = () => {
       collabClient.disconnect();
     };
   }, [canvasId, canvasRole]);
+
+  useEffect(() => {
+    if (canvasId) {
+      pluginManager.setCanvasId(canvasId);
+      pluginManager.loadInstalledPluginsFromServer();
+    }
+    return () => {
+      pluginManager.destroyAll();
+    };
+  }, [canvasId]);
+
+  useEffect(() => {
+    const ids = [...selectedIds];
+    pluginManager.broadcastEvent('selection:changed', ids);
+  }, [selectedIds]);
+
+  useEffect(() => {
+    pluginManager.broadcastEvent('viewport:changed', { ...viewport });
+  }, [viewport.x, viewport.y, viewport.zoom]);
+
+  useEffect(() => {
+    const handleAdd = (el: CanvasElement) => {
+      pluginManager.broadcastEvent('element:created', { ...el });
+    };
+    const handleUpdate = (id: string, updates: Partial<CanvasElement>) => {
+      const el = useCanvasStore.getState().elements.get(id);
+      if (el) {
+        pluginManager.broadcastEvent('element:updated', { ...el });
+      }
+    };
+    const handleDelete = (id: string) => {
+      pluginManager.broadcastEvent('element:deleted', id);
+    };
+
+    const origAdd = useCanvasStore.getState().addElement;
+    const origUpdate = useCanvasStore.getState().updateElement;
+    const origDelete = useCanvasStore.getState().deleteElement;
+
+    const unsub = useCanvasStore.subscribe((state, prevState) => {
+      if (state.elements !== prevState.elements) {
+        const prevKeys = new Set(prevState.elements.keys());
+        const currKeys = new Set(state.elements.keys());
+        for (const k of currKeys) {
+          if (!prevKeys.has(k)) {
+            const el = state.elements.get(k);
+            if (el) handleAdd(el);
+          } else {
+            const prev = prevState.elements.get(k);
+            const curr = state.elements.get(k);
+            if (prev && curr && prev !== curr) {
+              handleUpdate(k, curr as any);
+            }
+          }
+        }
+        for (const k of prevKeys) {
+          if (!currKeys.has(k)) {
+            handleDelete(k);
+          }
+        }
+      }
+    });
+
+    return () => { unsub(); };
+  }, []);
+
+  useEffect(() => {
+    const unsub = useCanvasStore.subscribe((state, prevState) => {
+      if (state.onlineUsers !== prevState.onlineUsers) {
+        const prevUserIds = new Set(prevState.onlineUsers.keys());
+        const currUserIds = new Set(state.onlineUsers.keys());
+        for (const uid of currUserIds) {
+          if (!prevUserIds.has(uid)) {
+            const user = state.onlineUsers.get(uid);
+            if (user) pluginManager.broadcastEvent('user:joined', { ...user });
+          }
+        }
+        for (const uid of prevUserIds) {
+          if (!currUserIds.has(uid)) {
+            pluginManager.broadcastEvent('user:left', uid);
+          }
+        }
+      }
+    });
+    return () => { unsub(); };
+  }, []);
 
   const zoomToFit = useCallback(() => {
     if (elements.size === 0) {

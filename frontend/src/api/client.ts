@@ -4,6 +4,7 @@ import type {
   Version, Template, Permission, Role, Comment, CommentReply,
   CommentWithReplies, Notification
 } from '@/types';
+import type { PluginInstallation, PluginPermission } from '@/types/plugin';
 
 const API_BASE = '/api';
 
@@ -174,6 +175,23 @@ export const notificationApi = {
     client.put(`/notifications/${id}/read`).then(r => r.data),
   markAllRead: (): Promise<void> =>
     client.put('/notifications/read-all'),
+};
+
+export interface PluginInstallRequest {
+  pluginName: string;
+  pluginVersion: string;
+  permissions: PluginPermission[];
+}
+
+export const pluginApi = {
+  list: (canvasId: string): Promise<PluginInstallation[]> =>
+    client.get(`/canvases/${canvasId}/plugins`).then(r => r.data),
+  install: (canvasId: string, data: PluginInstallRequest): Promise<PluginInstallation> =>
+    client.post(`/canvases/${canvasId}/plugins`, data).then(r => r.data),
+  toggle: (canvasId: string, name: string): Promise<PluginInstallation> =>
+    client.put(`/canvases/${canvasId}/plugins/${name}/toggle`).then(r => r.data),
+  uninstall: (canvasId: string, name: string): Promise<void> =>
+    client.delete(`/canvases/${canvasId}/plugins/${name}`),
 };
 
 export default client;
