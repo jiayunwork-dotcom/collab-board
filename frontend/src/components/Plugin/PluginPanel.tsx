@@ -20,26 +20,23 @@ const PluginPanel: React.FC = () => {
   const [toggling, setToggling] = useState<string | null>(null);
   const [uninstalling, setUninstalling] = useState<string | null>(null);
 
-  const installed = useSyncExternalStore(
-    (cb) => pluginManager.subscribe(cb),
-    () => pluginManager.getInstalledPlugins(),
-  );
+  const subscribePluginManager = useCallback((cb: () => void) => {
+    return pluginManager.subscribe(cb);
+  }, []);
 
-  const runningNames = useSyncExternalStore(
-    (cb) => pluginManager.subscribe(cb),
-    () => {
-      const running = new Set<string>();
-      pluginManager.getRuntimePlugins().forEach(p => {
-        if (p.status === 'running') running.add(p.name);
-      });
-      return running;
-    },
-  );
+  const subscribeSecurityLogger = useCallback((cb: () => void) => {
+    return securityLogger.subscribe(cb);
+  }, []);
 
-  const logs = useSyncExternalStore(
-    (cb) => securityLogger.subscribe(cb),
-    () => securityLogger.getLogs(),
-  );
+  const getInstalled = useCallback(() => pluginManager.getInstalledPlugins(), []);
+  const getRunningArr = useCallback(() => pluginManager.getRunningPluginNames(), []);
+  const getLogs = useCallback(() => securityLogger.getLogs(), []);
+
+  const installed = useSyncExternalStore(subscribePluginManager, getInstalled);
+  const runningArr = useSyncExternalStore(subscribePluginManager, getRunningArr);
+  const logs = useSyncExternalStore(subscribeSecurityLogger, getLogs);
+
+  const runningNames = new Set(runningArr);
 
   const handleInstall = async (plugin: BuiltinPluginInfo) => {
     setInstalling(plugin.name);

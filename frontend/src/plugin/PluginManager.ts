@@ -54,17 +54,32 @@ class PluginManager {
   private canvasId: string | null = null;
   private listeners: Set<() => void> = new Set();
   private installedPlugins: PluginInstallation[] = [];
+  private cachedRunningNames: string[] = [];
+  private runningNamesDirty = true;
 
   setCanvasId(canvasId: string | null): void {
     this.canvasId = canvasId;
   }
 
   getInstalledPlugins(): PluginInstallation[] {
-    return [...this.installedPlugins];
+    return this.installedPlugins;
   }
 
   getRuntimePlugins(): PluginRuntimeInfo[] {
     return [...this.plugins.values()];
+  }
+
+  getRunningPluginNames(): string[] {
+    if (this.runningNamesDirty) {
+      const names: string[] = [];
+      this.plugins.forEach(p => {
+        if (p.status === 'running') names.push(p.name);
+      });
+      names.sort();
+      this.cachedRunningNames = names;
+      this.runningNamesDirty = false;
+    }
+    return this.cachedRunningNames;
   }
 
   getPlugin(name: string): PluginRuntimeInfo | undefined {
@@ -93,6 +108,7 @@ class PluginManager {
   }
 
   private notify(): void {
+    this.runningNamesDirty = true;
     this.listeners.forEach(cb => {
       try { cb(); } catch (e) { console.error('[PluginManager] Listener error:', e); }
     });
@@ -172,7 +188,7 @@ class PluginManager {
     };
 
     const installed = await pluginApi.install(this.canvasId, req);
-    this.installedPlugins.push(installed);
+    this.installedPlugins = [...this.installedPlugins, installed];
 
     try {
       await this.loadAndRunPlugin(name);
@@ -216,7 +232,9 @@ class PluginManager {
 
     const idx = this.installedPlugins.findIndex(p => p.pluginName === name);
     if (idx >= 0) {
-      this.installedPlugins[idx] = { ...this.installedPlugins[idx], enabled: !this.installedPlugins[idx].enabled };
+      const newPlugins = [...this.installedPlugins];
+      newPlugins[idx] = { ...newPlugins[idx], enabled: !newPlugins[idx].enabled };
+      this.installedPlugins = newPlugins;
     }
 
     this.notify();

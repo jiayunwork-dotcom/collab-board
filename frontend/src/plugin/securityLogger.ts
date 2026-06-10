@@ -13,10 +13,11 @@ class SecurityLogger {
       id: uid(),
       timestamp: Date.now(),
     };
-    this.logs.unshift(fullEntry);
-    if (this.logs.length > MAX_LOG_ENTRIES) {
-      this.logs = this.logs.slice(0, MAX_LOG_ENTRIES);
+    const newLogs = [fullEntry, ...this.logs];
+    if (newLogs.length > MAX_LOG_ENTRIES) {
+      newLogs.length = MAX_LOG_ENTRIES;
     }
+    this.logs = newLogs;
     this.notifyListeners();
   }
 
@@ -57,10 +58,11 @@ class SecurityLogger {
   }
 
   getLogs(): SecurityLogEntry[] {
-    return [...this.logs];
+    return this.logs;
   }
 
   clear(): void {
+    if (this.logs.length === 0) return;
     this.logs = [];
     this.notifyListeners();
   }
@@ -71,7 +73,7 @@ class SecurityLogger {
   }
 
   private notifyListeners(): void {
-    const snapshot = this.getLogs();
+    const snapshot = this.logs;
     this.listeners.forEach(cb => {
       try {
         cb(snapshot);
