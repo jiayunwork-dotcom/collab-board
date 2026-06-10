@@ -2,11 +2,12 @@ import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { useCanvasStore } from '@/store/canvasStore';
 import { CanvasRenderer } from '@/canvas/CanvasRenderer';
 import { collabClient } from '@/collaboration/CollabClient';
-import { elementApi } from '@/api/client';
+import { elementApi, commentApi } from '@/api/client';
 import type { CanvasElement, Tool, ElementType } from '@/types';
 import { uid, clamp, pointInRect, getElementBBox, deepClone, throttle, debounce } from '@/utils';
 import { screenToWorld, worldToScreen } from '@/canvas/geometry';
 import MiniMap from './MiniMap';
+import CommentLayer from './CommentLayer';
 
 const MAX_ZOOM = 10;
 const MIN_ZOOM = 0.1;
@@ -36,6 +37,7 @@ const CanvasBoard: React.FC = () => {
   const spacePressedRef = useRef(false);
   const editingRef = useRef<{ elementId: string; input: HTMLTextAreaElement } | null>(null);
   const [editingText, setEditingText] = useState<{ elementId: string; x: number; y: number; width: number; height: number; text: string; fontSize: number; color: string; align: 'left' | 'center' | 'right' } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; elementId: string | null } | null>(null);
 
   const {
     currentCanvas,
@@ -68,6 +70,9 @@ const CanvasBoard: React.FC = () => {
     setSelectionBox,
     updateCanvasMeta,
     canvasRole,
+    addComment,
+    setCommentReplies,
+    setOpenCommentId,
   } = useCanvasStore();
 
   const canvasId = currentCanvas?.canvas.id;
@@ -923,6 +928,76 @@ const CanvasBoard: React.FC = () => {
   }, [canvasId, canvasRole, viewport, createElement, finishDraw]);
 
   const canEdit = canvasRole && canvasRole !== 'VIEWER' && canvasRole !== 'PUBLIC';
+  const canComment = canvasRole && canvasRole !== 'VIEWER' && canvasRole !== 'PUBLIC';
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    const world = screenToWorld(sx, sy, viewport);
+    const hitId = hitTest(world.x, world.y);
+    setContextMenu({ x: e.clientX, y: e.clientY, elementId: hitId });
+  }, [viewport, hitTest]);
+
+  const handleAddComment = useCallback(async () => {
+    if (!contextMenu || !canvasId || !canComment) return;
+    const elementId = contextMenu.elementId;
+    try {
+      let anchorX: number, anchorY: number;
+      if (elementId) {
+        const el = elements.get(elementId);
+        if (el) {
+          anchorX = el.x + el.width;
+          anchorY = el.y;
+        } else {
+          if (!canvasRef.current) return;
+          const rect = canvasRef.current.getBoundingClientRect();
+          const sx = contextMenu.x - rect.left;
+          const sy = contextMenu.y - rect.top;
+          const world = screenToWorld(sx, sy, viewport);
+          anchorX = world.x;
+          anchorY = world.y;
+        }
+      } else {
+        if (!canvasRef.current) return;
+        const rect = canvasRef.current.getBoundingClientRect();
+        const sx = contextMenu.x - rect.left;
+        const sy = contextMenu.y - rect.top;
+        const world = screenToWorld(sx, sy, viewport);
+        anchorX = world.x;
+        anchorY = world.y;
+      }
+
+      const data = await commentApi.create(canvasId, {
+        anchorX,
+        anchorY,
+        attachedElementId: elementId || undefined,
+      });
+      addComment(data.comment);
+      if (data.replies && data.replies.length > 0) {
+        setCommentReplies(data.comment.id, data.replies);
+      }
+      setOpenCommentId(data.comment.id);
+      setCurrentTool('select');
+    } catch (e) {
+      console.error('Failed to create comment', e);
+    }
+    setContextMenu(null);
+  }, [contextMenu, canvasId, canComment, elements, viewport, addComment, setCommentReplies, setOpenCommentId, setCurrentTool]);
+
+  const handleDeleteElement = useCallback(() => {
+    if (!contextMenu?.elementId || !canEdit) return;
+    const id = contextMenu.elementId;
+    deleteElement(id);
+    if (canvasId) {
+      elementApi.batchDelete(canvasId, [id]).catch(console.error);
+      collabClient.sendOperation('BATCH_DELETE_ELEMENTS', { ids: [id] });
+    }
+    clearSelection();
+    setContextMenu(null);
+  }, [contextMenu, canEdit, deleteElement, canvasId, clearSelection]);
 
   return (
     <div
@@ -949,7 +1024,7 @@ const CanvasBoard: React.FC = () => {
         }}
         onWheel={handleWheel}
         onDoubleClick={handleDoubleClick}
-        onContextMenu={(e) => e.preventDefault()}
+        onContextMenu={handleContextMenu}
       />
 
       {editingText && (
@@ -998,6 +1073,52 @@ const CanvasBoard: React.FC = () => {
       )}
 
       <MiniMap canvasRef={canvasRef} onZoomToFit={zoomToFit} />
+
+      <CommentLayer />
+
+      {contextMenu && (
+        <>
+          <div
+            className="fixed inset-0 z-50"
+            onClick={() => setContextMenu(null)}
+            onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); }}
+          />
+          <div
+            className="fixed z-[60] panel shadow-xl overflow-hidden py-1 min-w-[160px]"
+            style={{
+              left: contextMenu.x,
+              top: contextMenu.y,
+              transformOrigin: 'top left',
+            }}
+          >
+            {canComment && (
+              <button
+                className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-indigo-50 transition-colors text-sm text-slate-700"
+                onClick={handleAddComment}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                </svg>
+                {contextMenu.elementId ? '添加评论' : '添加评论'}
+              </button>
+            )}
+            {contextMenu.elementId && canEdit && (
+              <div className="border-t border-slate-100 my-1" />
+            )}
+            {contextMenu.elementId && canEdit && (
+              <button
+                className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-red-50 transition-colors text-sm text-red-600"
+                onClick={handleDeleteElement}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14z" />
+                </svg>
+                删除元素
+              </button>
+            )}
+          </div>
+        </>
+      )}
 
       <div className="absolute bottom-4 left-4 toolbar gap-2">
         <button

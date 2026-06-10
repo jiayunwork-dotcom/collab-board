@@ -1,7 +1,8 @@
 import axios, { AxiosInstance, AxiosResponse } from 'axios';
 import type {
   User, Canvas, CanvasElement, CanvasConnection, FullCanvas,
-  Version, Template, Permission, Role
+  Version, Template, Permission, Role, Comment, CommentReply,
+  CommentWithReplies, Notification
 } from '@/types';
 
 const API_BASE = '/api';
@@ -146,6 +147,33 @@ export const permissionApi = {
     client.delete(`/canvases/${canvasId}/permissions/${id}`),
   acceptInvite: (token: string): Promise<Permission> =>
     client.post(`/invitations/accept/${token}`).then(r => r.data),
+};
+
+export const commentApi = {
+  list: (canvasId: string): Promise<Comment[]> =>
+    client.get(`/canvases/${canvasId}/comments`).then(r => r.data),
+  create: (canvasId: string, data: {
+    anchorX: number;
+    anchorY: number;
+    attachedElementId?: string;
+    content?: string;
+  }): Promise<CommentWithReplies> =>
+    client.post(`/canvases/${canvasId}/comments`, data).then(r => r.data),
+  getWithReplies: (id: string): Promise<CommentWithReplies> =>
+    client.get(`/comments/${id}`).then(r => r.data),
+  addReply: (commentId: string, content: string): Promise<CommentReply> =>
+    client.post(`/comments/${commentId}/replies`, { content }).then(r => r.data),
+};
+
+export const notificationApi = {
+  list: (): Promise<Notification[]> =>
+    client.get('/notifications').then(r => r.data),
+  unreadCount: (): Promise<{ count: number }> =>
+    client.get('/notifications/unread-count').then(r => r.data),
+  markRead: (id: string): Promise<Notification> =>
+    client.put(`/notifications/${id}/read`).then(r => r.data),
+  markAllRead: (): Promise<void> =>
+    client.put('/notifications/read-all'),
 };
 
 export default client;

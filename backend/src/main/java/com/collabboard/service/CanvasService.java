@@ -162,6 +162,17 @@ public class CanvasService {
                 .orElseThrow(() -> new RuntimeException("No permission to view this canvas"));
     }
 
+    public void checkViewPermission(UUID canvasId, UUID userId) {
+        Canvas canvas = canvasRepository.findById(canvasId)
+                .orElseThrow(() -> new RuntimeException("Canvas not found"));
+        checkReadPermission(canvas, userId);
+    }
+
+    public Canvas getCanvasEntity(UUID canvasId) {
+        return canvasRepository.findById(canvasId)
+                .orElseThrow(() -> new RuntimeException("Canvas not found"));
+    }
+
     public void checkEditPermission(UUID canvasId, UUID userId) {
         if (userId == null) {
             throw new RuntimeException("Authentication required");

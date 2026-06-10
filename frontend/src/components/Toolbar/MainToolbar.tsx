@@ -2,8 +2,9 @@ import React, { useState } from 'react';
 import { useCanvasStore } from '@/store/canvasStore';
 import type { Tool } from '@/types';
 import { DEFAULT_COLORS, STROKE_WIDTHS, FONT_SIZES } from '@/utils';
-import { canvasApi } from '@/api/client';
+import { canvasApi, authApi } from '@/api/client';
 import { useNavigate } from 'react-router-dom';
+import NotificationBell from '@/components/Notification/NotificationBell';
 
 interface ToolButton {
   tool: Tool;
@@ -28,6 +29,7 @@ const TOOL_BUTTONS: ToolButton[] = [
   { tool: 'image', icon: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M8.5 10.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM21 15l-5-5L5 21', label: '图片' },
   { tool: 'connection', icon: 'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71', label: '连线' },
   { tool: 'mindnode', icon: 'M12 2v4M12 10v4M6 20a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM18 20a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM12 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM12 8v4M7.5 14.5L10 12M16.5 14.5L14 12', label: '思维导图' },
+  { tool: 'comment', icon: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2zM8 10h.01M12 10h.01M16 10h.01', label: '评论', shortcut: 'C' },
 ];
 
 const Popover: React.FC<{
@@ -73,6 +75,8 @@ const MainToolbar: React.FC = () => {
     mindMapMode,
     setMindMapMode,
     canvasRole,
+    currentUser,
+    setCurrentUser,
   } = useCanvasStore();
 
   const canEdit = canvasRole && canvasRole !== 'VIEWER' && canvasRole !== 'PUBLIC';
@@ -360,6 +364,55 @@ const MainToolbar: React.FC = () => {
               <path d="M12 6v6M12 12l-7 6M12 12l7 6" />
             </svg>
           </button>
+        </div>
+
+        <div className="h-6 w-px bg-slate-200 mx-1" />
+
+        <div className="toolbar">
+          <NotificationBell />
+
+          {currentUser ? (
+            <div className="relative group ml-1">
+              <div
+                className="w-8 h-8 rounded-full cursor-pointer flex items-center justify-center text-white font-semibold text-xs ring-2 ring-white shadow-sm"
+                style={{ background: currentUser.color || '#6366F1' }}
+                title={currentUser.username}
+              >
+                {(currentUser.username || 'U').charAt(0).toUpperCase()}
+              </div>
+              <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-xl shadow-slate-200/50 border border-slate-100 py-1 z-50 hidden group-hover:block">
+                <div className="px-4 py-2 border-b border-slate-100">
+                  <p className="text-sm font-semibold text-slate-700 truncate">{currentUser.username}</p>
+                  <p className="text-xs text-slate-400 truncate">{currentUser.email}</p>
+                </div>
+                <button
+                  className="w-full text-left px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 flex items-center gap-2"
+                  onClick={() => navigate('/dashboard')}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><path d="M20 14v7h-7" /></svg>
+                  我的画布
+                </button>
+                <button
+                  className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+                  onClick={() => {
+                    authApi.logout();
+                    setCurrentUser(null);
+                    navigate('/login', { replace: true });
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" /></svg>
+                  退出登录
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              className="btn btn-sm font-medium"
+              onClick={() => navigate('/login')}
+            >
+              登录
+            </button>
+          )}
         </div>
 
         <div className="h-6 w-px bg-slate-200 mx-1" />

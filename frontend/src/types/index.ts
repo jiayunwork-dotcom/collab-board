@@ -121,7 +121,67 @@ export type Tool =
   | 'sticky_note'
   | 'image'
   | 'mindnode'
-  | 'connection';
+  | 'connection'
+  | 'comment';
+
+export interface Comment {
+  id: UUID;
+  canvasId: UUID;
+  anchorX: number;
+  anchorY: number;
+  attachedElementId?: UUID;
+  createdBy: UUID;
+  createdByName?: string;
+  createdByAvatar?: string;
+  createdByColor?: string;
+  createdAt: string;
+  replyCount: number;
+}
+
+export interface CommentReply {
+  id: UUID;
+  commentId: UUID;
+  userId: UUID;
+  username?: string;
+  userAvatar?: string;
+  userColor?: string;
+  content: string;
+  mentions: UUID[];
+  createdAt: string;
+}
+
+export interface CommentWithReplies {
+  comment: Comment;
+  replies: CommentReply[];
+}
+
+export interface MentionUser {
+  id: UUID;
+  username: string;
+  avatarUrl?: string;
+  color: string;
+}
+
+export type NotificationType = 'MENTION' | string;
+
+export interface Notification {
+  id: UUID;
+  userId: UUID;
+  type: NotificationType;
+  payload: {
+    commentId?: UUID;
+    canvasId?: UUID;
+    canvasTitle?: string;
+    fromUserId?: UUID;
+    fromUserName?: string;
+    content?: string;
+    anchorX?: number;
+    anchorY?: number;
+    [key: string]: any;
+  };
+  isRead: boolean;
+  createdAt: string;
+}
 
 export interface Viewport {
   x: number;

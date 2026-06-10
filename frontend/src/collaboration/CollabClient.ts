@@ -1,6 +1,6 @@
 import { Client, IMessage, StompSubscription } from '@stomp/stompjs';
 import SockJS from 'sockjs-client';
-import type { CollabMessage, OnlineUser, UUID, CanvasElement, CanvasConnection } from '@/types';
+import type { CollabMessage, OnlineUser, UUID, CanvasElement, CanvasConnection, Comment, CommentReply, Notification } from '@/types';
 import { useCanvasStore } from '@/store/canvasStore';
 import { uid } from '@/utils';
 
@@ -193,8 +193,49 @@ export class CollabClient {
             }
           })
         );
+
+        this.subscriptions.push(
+          this.client.subscribe(`/user/queue/notifications`, (msg: IMessage) => {
+            try {
+              const notification: Notification = JSON.parse(msg.body);
+              const store = useCanvasStore.getState();
+              store.addNotification(notification);
+            } catch (e) {
+              console.error('Notification parse error', e);
+            }
+          })
+        );
       }
     }
+
+    this.subscriptions.push(
+      this.client.subscribe(`/topic/canvas/${cid}/comments`, (msg: IMessage) => {
+        try {
+          const parsed = JSON.parse(msg.body);
+          const store = useCanvasStore.getState();
+          const currentUserId = store.currentUser?.id;
+
+          if (parsed.type === 'COMMENT_CREATED' && parsed.comment) {
+            const comment = parsed.comment as Comment;
+            if (comment.createdBy !== currentUserId) {
+              store.addComment(comment);
+            }
+          } else if (parsed.type === 'REPLY_CREATED' && parsed.reply) {
+            const reply = parsed.reply as CommentReply;
+            const commentId = parsed.commentId as string;
+            if (reply.userId !== currentUserId) {
+              if (store.commentReplies.has(commentId)) {
+                store.addCommentReply(commentId, reply);
+              } else {
+                store.updateComment(commentId, { replyCount: (store.comments.get(commentId)?.replyCount || 0) + 1 });
+              }
+            }
+          }
+        } catch (e) {
+          console.error('Comment event parse error', e);
+        }
+      })
+    );
   }
 
   disconnect() {

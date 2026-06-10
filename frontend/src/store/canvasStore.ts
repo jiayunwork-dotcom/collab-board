@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import type {
   User, Canvas, CanvasElement, CanvasConnection, Tool, Viewport,
-  OnlineUser, CollabMessage, FullCanvas, Role
+  OnlineUser, CollabMessage, FullCanvas, Role, Comment, CommentReply,
+  CommentWithReplies, Notification
 } from '@/types';
 import { uid } from '@/utils';
 
@@ -94,6 +95,26 @@ interface CanvasState {
   groups: Map<string, string[]>;
   groupElements: (ids: string[]) => string;
   ungroupElements: (groupId: string) => void;
+
+  comments: Map<string, Comment>;
+  setComments: (comments: Comment[]) => void;
+  addComment: (comment: Comment) => void;
+  updateComment: (id: string, updates: Partial<Comment>) => void;
+  removeComment: (id: string) => void;
+  openCommentId: string | null;
+  setOpenCommentId: (id: string | null) => void;
+  commentReplies: Map<string, CommentReply[]>;
+  setCommentReplies: (commentId: string, replies: CommentReply[]) => void;
+  addCommentReply: (commentId: string, reply: CommentReply) => void;
+
+  notifications: Notification[];
+  setNotifications: (notifications: Notification[]) => void;
+  addNotification: (notification: Notification) => void;
+  markNotificationRead: (id: string) => void;
+  unreadNotificationCount: number;
+  setUnreadNotificationCount: (count: number) => void;
+  notificationsOpen: boolean;
+  setNotificationsOpen: (open: boolean) => void;
 }
 
 export const useCanvasStore = create<CanvasState>((set, get) => ({
@@ -364,4 +385,65 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     });
     return { groups: m, elements: em };
   }),
+
+  comments: new Map(),
+  setComments: (comments) => set({ comments: new Map(comments.map(c => [c.id, c])) }),
+  addComment: (comment) => set((s) => {
+    const m = new Map(s.comments);
+    m.set(comment.id, comment);
+    return { comments: m };
+  }),
+  updateComment: (id, updates) => set((s) => {
+    const m = new Map(s.comments);
+    const existing = m.get(id);
+    if (existing) {
+      m.set(id, { ...existing, ...updates });
+    }
+    return { comments: m };
+  }),
+  removeComment: (id) => set((s) => {
+    const m = new Map(s.comments);
+    m.delete(id);
+    const rm = new Map(s.commentReplies);
+    rm.delete(id);
+    return { comments: m, commentReplies: rm };
+  }),
+  openCommentId: null,
+  setOpenCommentId: (id) => set({ openCommentId: id }),
+  commentReplies: new Map(),
+  setCommentReplies: (commentId, replies) => set((s) => {
+    const m = new Map(s.commentReplies);
+    m.set(commentId, replies);
+    return { commentReplies: m };
+  }),
+  addCommentReply: (commentId, reply) => set((s) => {
+    const m = new Map(s.commentReplies);
+    const existing = m.get(commentId) || [];
+    m.set(commentId, [...existing, reply]);
+    const cm = new Map(s.comments);
+    const comment = cm.get(commentId);
+    if (comment) {
+      cm.set(commentId, { ...comment, replyCount: (comment.replyCount || 0) + 1 });
+    }
+    return { commentReplies: m, comments: cm };
+  }),
+
+  notifications: [],
+  setNotifications: (notifications) => set({ notifications }),
+  addNotification: (notification) => set((s) => {
+    const exists = s.notifications.find(n => n.id === notification.id);
+    if (exists) return {};
+    const updated = [notification, ...s.notifications];
+    const unreadCount = updated.filter(n => !n.isRead).length;
+    return { notifications: updated, unreadNotificationCount: unreadCount };
+  }),
+  markNotificationRead: (id) => set((s) => {
+    const updated = s.notifications.map(n => n.id === id ? { ...n, isRead: true } : n);
+    const unreadCount = updated.filter(n => !n.isRead).length;
+    return { notifications: updated, unreadNotificationCount: unreadCount };
+  }),
+  unreadNotificationCount: 0,
+  setUnreadNotificationCount: (count) => set({ unreadNotificationCount: count }),
+  notificationsOpen: false,
+  setNotificationsOpen: (open) => set({ notificationsOpen: open }),
 }));

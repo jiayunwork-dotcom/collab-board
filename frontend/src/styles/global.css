@@ -139,3 +139,48 @@
 .scrollbar::-webkit-scrollbar-track { background: transparent; }
 .scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
 .scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+.mention-highlight {
+  background: linear-gradient(120deg, #e0e7ff, #ede9fe);
+  color: #4f46e5;
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-weight: 500;
+  display: inline;
+}
+
+.comment-anchor {
+  transition: transform 0.15s ease;
+}
+.comment-anchor:hover {
+  transform: scale(1.1);
+}
+
+.comment-panel {
+  animation: panelIn 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+}
+@keyframes panelIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.animate-in {
+  animation: fadeIn 0.2s ease;
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
