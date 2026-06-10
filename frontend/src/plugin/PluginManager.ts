@@ -249,20 +249,40 @@ class PluginManager {
     this.stopPlugin(name);
 
     let worker: Worker;
+    let workerUrl: string;
     try {
-      const workerCode = buildWorkerCode(entryCode, JSON.stringify(manifest));
+      const hostOrigin = window.location.origin;
+      const entryUrl = new URL(manifest.entry, window.location.href);
+      const pluginBaseUrl = entryUrl.href.substring(0, entryUrl.href.lastIndexOf('/') + 1);
+      const workerCode = buildWorkerCode(entryCode, JSON.stringify(manifest), hostOrigin, pluginBaseUrl);
       const blob = new Blob([workerCode], { type: 'application/javascript' });
-      const workerUrl = URL.createObjectURL(blob);
+      workerUrl = URL.createObjectURL(blob);
       worker = new Worker(workerUrl);
-      URL.revokeObjectURL(workerUrl);
     } catch (e: any) {
       throw new Error(`Failed to create Worker: ${e.message}`);
     }
 
+    let isLoaded = false;
+    const revokeWhenReady = () => {
+      if (!isLoaded) {
+        isLoaded = true;
+        setTimeout(() => {
+          try { URL.revokeObjectURL(workerUrl); } catch (e) {}
+        }, 100);
+      }
+    };
+
     worker.onmessage = (e) => {
+      revokeWhenReady();
       if (e.data?.type === '__security_violation__') {
         securityLogger.unsafeApi(name, e.data.api);
       }
+    };
+
+    worker.onerror = (e) => {
+      revokeWhenReady();
+      console.error(`[PluginManager] Worker error for '${name}':`, e);
+      securityLogger.loadError(name, e.message || 'Worker error');
     };
 
     const bridge = new PluginBridge(manifest, worker, () => {

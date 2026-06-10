@@ -5,6 +5,8 @@ export const WORKER_SANDBOX_TEMPLATE = `
   const _eval = globalThis.eval;
   const _Function = globalThis.Function;
   const _importScripts = globalThis.importScripts;
+  const __HOST_ORIGIN__ = '__HOST_ORIGIN_PLACEHOLDER__';
+  const __PLUGIN_BASE__ = '__PLUGIN_BASE_PLACEHOLDER__';
 
   const UNSAFE_ERROR = 'This API is disabled in plugin sandbox';
 
@@ -16,25 +18,34 @@ export const WORKER_SANDBOX_TEMPLATE = `
     throw new Error(UNSAFE_ERROR);
   };
 
+  function _resolveUrl(url) {
+    try {
+      return new URL(url, __PLUGIN_BASE__);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function _isAllowedUrl(url) {
+    const parsed = _resolveUrl(url);
+    if (!parsed) return false;
+    if (parsed.origin !== __HOST_ORIGIN__) return false;
+    return true;
+  }
+
   globalThis.importScripts = function(...urls) {
     for (const url of urls) {
-      try {
-        const u = new URL(url, location.href);
-        if (u.origin !== location.origin) {
-          postMessage({
-            type: '__security_violation__',
-            api: 'importScripts',
-            detail: 'External URL not allowed: ' + url
-          });
-          throw new Error('importScripts from external origin is forbidden');
-        }
-      } catch (e) {
-        if (e.message === 'importScripts from external origin is forbidden') {
-          throw e;
-        }
+      if (!_isAllowedUrl(url)) {
+        postMessage({
+          type: '__security_violation__',
+          api: 'importScripts',
+          detail: 'External URL not allowed: ' + url
+        });
+        throw new Error('importScripts from external origin is forbidden');
       }
     }
-    return _importScripts.apply(globalThis, urls);
+    const resolvedUrls = urls.map(u => _resolveUrl(u).href);
+    return _importScripts.apply(globalThis, resolvedUrls);
   };
 
   delete globalThis.document;
@@ -177,9 +188,18 @@ export const WORKER_SANDBOX_TEMPLATE = `
 })();
 `;
 
-export function buildWorkerCode(entryCode: string, manifestJson: string): string {
-  return WORKER_SANDBOX_TEMPLATE.replace(
+export function buildWorkerCode(
+  entryCode: string,
+  manifestJson: string,
+  hostOrigin: string,
+  pluginBaseUrl: string
+): string {
+  let code = WORKER_SANDBOX_TEMPLATE;
+  code = code.replace(/'__HOST_ORIGIN_PLACEHOLDER__'/g, JSON.stringify(hostOrigin));
+  code = code.replace(/'__PLUGIN_BASE_PLACEHOLDER__'/g, JSON.stringify(pluginBaseUrl));
+  code = code.replace(
     '__PLUGIN_ENTRY_CODE__',
     `\nconst __MANIFEST__ = ${manifestJson};\n\n${entryCode}\n`
   );
+  return code;
 }

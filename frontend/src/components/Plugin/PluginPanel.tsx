@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
 import { pluginManager, BUILTIN_PLUGINS } from '@/plugin/PluginManager';
 import { securityLogger } from '@/plugin/securityLogger';
 import type { PluginInstallation, SecurityLogEntry, PluginPermission, BuiltinPluginInfo } from '@/types/plugin';
@@ -15,35 +15,36 @@ const PERMISSION_LABELS: Record<PluginPermission, { label: string; desc: string;
 
 const PluginPanel: React.FC = () => {
   const [activeTab, setActiveTab] = useState<SubTab>('installed');
-  const [installed, setInstalled] = useState<PluginInstallation[]>([]);
-  const [runningNames, setRunningNames] = useState<Set<string>>(new Set());
-  const [logs, setLogs] = useState<SecurityLogEntry[]>([]);
   const [expandedPlugin, setExpandedPlugin] = useState<string | null>(null);
   const [installing, setInstalling] = useState<string | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
   const [uninstalling, setUninstalling] = useState<string | null>(null);
 
-  const refresh = useCallback(() => {
-    setInstalled(pluginManager.getInstalledPlugins());
-    const running = new Set<string>();
-    pluginManager.getRuntimePlugins().forEach(p => {
-      if (p.status === 'running') running.add(p.name);
-    });
-    setRunningNames(running);
-  }, []);
+  const installed = useSyncExternalStore(
+    (cb) => pluginManager.subscribe(cb),
+    () => pluginManager.getInstalledPlugins(),
+  );
 
-  useEffect(() => {
-    refresh();
-    const unsub = pluginManager.subscribe(refresh);
-    const unsubLogs = securityLogger.subscribe(setLogs);
-    return () => { unsub(); unsubLogs(); };
-  }, [refresh]);
+  const runningNames = useSyncExternalStore(
+    (cb) => pluginManager.subscribe(cb),
+    () => {
+      const running = new Set<string>();
+      pluginManager.getRuntimePlugins().forEach(p => {
+        if (p.status === 'running') running.add(p.name);
+      });
+      return running;
+    },
+  );
+
+  const logs = useSyncExternalStore(
+    (cb) => securityLogger.subscribe(cb),
+    () => securityLogger.getLogs(),
+  );
 
   const handleInstall = async (plugin: BuiltinPluginInfo) => {
     setInstalling(plugin.name);
     try {
       await pluginManager.installPlugin(plugin.name);
-      refresh();
     } catch (e: any) {
       alert('安装失败：' + (e.message || '未知错误'));
     } finally {
@@ -55,7 +56,6 @@ const PluginPanel: React.FC = () => {
     setToggling(name);
     try {
       await pluginManager.togglePlugin(name);
-      refresh();
     } catch (e: any) {
       alert('操作失败：' + (e.message || '未知错误'));
     } finally {
@@ -70,7 +70,6 @@ const PluginPanel: React.FC = () => {
     setUninstalling(name);
     try {
       await pluginManager.uninstallPlugin(name);
-      refresh();
     } catch (e: any) {
       alert('卸载失败：' + (e.message || '未知错误'));
     } finally {
