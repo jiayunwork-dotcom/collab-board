@@ -114,7 +114,9 @@ class PluginManager {
   }
 
   isPluginEnabled(name: string): boolean {
-    return this.plugins.get(name)?.status === 'running' || this.plugins.get(name)?.status === 'enabled';
+    const runtimeStatus = this.plugins.get(name)?.status === 'running' || this.plugins.get(name)?.status === 'enabled';
+    const installedStatus = this.installedPlugins.find(p => p.pluginName === name)?.enabled ?? false;
+    return runtimeStatus || installedStatus;
   }
 
   isPluginRunning(name: string): boolean {
@@ -447,13 +449,16 @@ class PluginManager {
       }
     }
 
-    await pluginApi.toggle(this.canvasId, name);
-
     if (installed.enabled) {
       const dependents = this.getDependents(name);
       if (dependents.length > 0) {
         throw new Error(`以下插件依赖此插件: ${dependents.join(', ')}。请先禁用这些插件。`);
       }
+    }
+
+    await pluginApi.toggle(this.canvasId, name);
+
+    if (installed.enabled) {
       this.stopPlugin(name);
       channelManager.unsubscribeAll(name);
     } else {

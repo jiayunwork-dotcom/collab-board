@@ -60,6 +60,13 @@ const PluginPanel: React.FC = () => {
         return;
       }
     }
+    if (installed && installed.enabled) {
+      const dependents = pluginManager.getDependents(name);
+      if (dependents.length > 0) {
+        alert(`无法禁用：以下插件依赖此插件 ${dependents.join('、')}，请先禁用这些插件。`);
+        return;
+      }
+    }
     setToggling(name);
     try {
       await pluginManager.togglePlugin(name);
