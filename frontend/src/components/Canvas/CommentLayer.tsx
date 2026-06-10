@@ -1,8 +1,8 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useCanvasStore } from '@/store/canvasStore';
-import { commentApi, notificationApi } from '@/api/client';
-import { worldToScreen, screenToWorld } from '@/canvas/geometry';
-import type { Comment, CommentReply, MentionUser, UUID } from '@/types';
+import { commentApi } from '@/api/client';
+import { worldToScreen } from '@/canvas/geometry';
+import type { Comment } from '@/types';
 import CommentPanel from './CommentPanel';
 
 const ANCHOR_SIZE = 32;
@@ -22,10 +22,8 @@ const CommentLayer: React.FC = () => {
     setComments,
     setCommentReplies,
     addComment,
-    addCommentReply,
     currentTool,
     canvasRole,
-    onlineUsers,
   } = useCanvasStore();
 
   const canvasId = currentCanvas?.canvas.id;
@@ -59,39 +57,20 @@ const CommentLayer: React.FC = () => {
     }
   }, []);
 
-  const getAnchorPosition = useCallback((comment: Comment): { x: number; y: number } => {
-    let wx = comment.anchorX;
-    let wy = comment.anchorY;
+  const getAnchorPosition = (comment: Comment): { x: number; y: number } => {
+    let wx = comment.anchorX ?? 0;
+    let wy = comment.anchorY ?? 0;
     if (comment.attachedElementId) {
-      const el = elements.get(comment.attachedElementId);
+      const elId = String(comment.attachedElementId);
+      const el = elements.get(elId);
       if (el) {
-        wx = el.x + el.width;
-        wy = el.y;
+        wx = el.x + (el.width || 0);
+        wy = el.y ?? 0;
       }
     }
     const screen = worldToScreen(wx, wy, viewport);
     return { x: screen.x, y: screen.y };
-  }, [viewport, elements]);
-
-  const handleCanvasClickForComment = useCallback((e: React.MouseEvent) => {
-    if (currentTool !== 'comment' || !canComment || !canvasId || !containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    const sx = e.clientX - rect.left;
-    const sy = e.clientY - rect.top;
-    const world = screenToWorld(sx, sy, viewport);
-
-    commentApi.create(canvasId, {
-      anchorX: world.x,
-      anchorY: world.y,
-    }).then(data => {
-      addComment(data.comment);
-      if (data.replies && data.replies.length > 0) {
-        setCommentReplies(data.comment.id, data.replies);
-      }
-      setOpenCommentId(data.comment.id);
-      useCanvasStore.getState().setCurrentTool('select');
-    }).catch(e => console.error('Failed to create comment', e));
-  }, [currentTool, canComment, canvasId, viewport, addComment, setCommentReplies, setOpenCommentId]);
+  };
 
   const openComment = comments.get(openCommentId || '');
   const openPos = openComment ? getAnchorPosition(openComment) : null;
@@ -100,7 +79,6 @@ const CommentLayer: React.FC = () => {
     <div
       ref={containerRef}
       className="absolute inset-0 pointer-events-none"
-      onClick={handleCanvasClickForComment}
       style={{ cursor: currentTool === 'comment' && canComment ? 'copy' : undefined }}
     >
       {[...comments.values()].map(comment => {

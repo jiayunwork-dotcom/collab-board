@@ -19,7 +19,7 @@ import java.util.stream.Collectors;
 @Service
 public class CommentService {
 
-    private static final Pattern MENTION_PATTERN = Pattern.compile("@([\\w-]+)\\|([0-9a-fA-F-]{36})");
+    private static final Pattern MENTION_PATTERN = Pattern.compile("@([^|\\s]+)\\|([0-9a-fA-F-]{36})");
 
     private final CommentRepository commentRepository;
     private final CommentReplyRepository replyRepository;
@@ -187,34 +187,62 @@ public class CommentService {
     }
 
     private void processMentions(UUID commentId, UUID canvasId, UUID fromUserId, String content) {
-        if (content == null) return;
+        if (content == null || content.isBlank()) return;
         List<UUID> mentionUserIds = extractMentionUserIds(content);
-        if (mentionUserIds.isEmpty()) return;
+        if (mentionUserIds.isEmpty()) {
+            log.debug("No mentions found in content: {}", content);
+            return;
+        }
+        log.info("Processing {} mentions in comment {} by user {}", mentionUserIds.size(), commentId, fromUserId);
 
-        Canvas canvas = canvasService.getCanvasEntity(canvasId);
-        User fromUser = userRepository.findById(fromUserId).orElse(null);
-        String fromUserName = fromUser != null ? fromUser.getUsername() : "Someone";
+        String canvasTitle = "";
+        try {
+            Canvas canvas = canvasService.getCanvasEntity(canvasId);
+            canvasTitle = canvas != null ? canvas.getTitle() : "";
+        } catch (Exception e) {
+            log.warn("Failed to get canvas info for mention notification, canvasId={}", canvasId, e);
+        }
 
-        Comment comment = commentRepository.findById(commentId).orElse(null);
-        double anchorX = comment != null ? comment.getAnchorX() : 0.0;
-        double anchorY = comment != null ? comment.getAnchorY() : 0.0;
+        String fromUserName = "Someone";
+        try {
+            User fromUser = userRepository.findById(fromUserId).orElse(null);
+            fromUserName = fromUser != null ? fromUser.getUsername() : "Someone";
+        } catch (Exception e) {
+            log.warn("Failed to get user info for mention notification, userId={}", fromUserId, e);
+        }
+
+        double anchorX = 0.0;
+        double anchorY = 0.0;
+        try {
+            Comment comment = commentRepository.findById(commentId).orElse(null);
+            anchorX = comment != null && comment.getAnchorX() != null ? comment.getAnchorX() : 0.0;
+            anchorY = comment != null && comment.getAnchorY() != null ? comment.getAnchorY() : 0.0;
+        } catch (Exception e) {
+            log.warn("Failed to get comment info for mention notification, commentId={}", commentId, e);
+        }
+
+        String cleanedContent = cleanContent(content);
 
         for (UUID mentionUserId : mentionUserIds) {
-            if (mentionUserId.equals(fromUserId)) continue;
+            if (mentionUserId.equals(fromUserId)) {
+                log.debug("Skipping self-mention for user {}", mentionUserId);
+                continue;
+            }
             try {
                 Map<String, Object> payload = new HashMap<>();
                 payload.put("commentId", commentId.toString());
                 payload.put("canvasId", canvasId.toString());
-                payload.put("canvasTitle", canvas != null ? canvas.getTitle() : "");
+                payload.put("canvasTitle", canvasTitle);
                 payload.put("fromUserId", fromUserId.toString());
                 payload.put("fromUserName", fromUserName);
-                payload.put("content", cleanContent(content));
+                payload.put("content", cleanedContent);
                 payload.put("anchorX", anchorX);
                 payload.put("anchorY", anchorY);
 
-                notificationService.createNotification(mentionUserId, "MENTION", payload);
+                NotificationDto dto = notificationService.createNotification(mentionUserId, "MENTION", payload);
+                log.info("Created mention notification id={} for user={}", dto.getId(), mentionUserId);
             } catch (Exception e) {
-                log.warn("Failed to send mention notification to user={}", mentionUserId, e);
+                log.error("Failed to create/send mention notification for user={}", mentionUserId, e);
             }
         }
     }

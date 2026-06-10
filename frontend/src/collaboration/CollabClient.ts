@@ -26,6 +26,29 @@ export class CollabClient {
     this.handlers = { ...this.handlers, ...handlers };
   }
 
+  private notificationSubscribed = false;
+  private notificationSub: StompSubscription | null = null;
+
+  private setupNotificationSubscription() {
+    if (!this.client || !this.token || this.notificationSubscribed) return;
+    try {
+      this.notificationSub = this.client.subscribe(`/user/queue/notifications`, (msg: IMessage) => {
+        try {
+          const notification: Notification = JSON.parse(msg.body);
+          console.log('[Notification] Received:', notification);
+          const store = useCanvasStore.getState();
+          store.addNotification(notification);
+        } catch (e) {
+          console.error('Notification parse error', e);
+        }
+      });
+      this.notificationSubscribed = true;
+      console.log('[Notification] Subscribed to /user/queue/notifications');
+    } catch (e) {
+      console.error('[Notification] Failed to subscribe:', e);
+    }
+  }
+
   connect(canvasId: string, token: string | null = null): Promise<void> {
     this.canvasId = canvasId;
     this.token = token || localStorage.getItem('collab_token');
@@ -53,6 +76,7 @@ export class CollabClient {
           this.connected = true;
           this.reconnectAttempts = 0;
           this.setupSubscriptions();
+          this.setupNotificationSubscription();
           resolve();
         },
         onStompError: (frame) => {
@@ -190,18 +214,6 @@ export class CollabClient {
               this.handlers.onAck?.(parsed.opId, parsed.success, parsed.result, parsed.error);
             } catch (e) {
               console.error('ACK parse error', e);
-            }
-          })
-        );
-
-        this.subscriptions.push(
-          this.client.subscribe(`/user/queue/notifications`, (msg: IMessage) => {
-            try {
-              const notification: Notification = JSON.parse(msg.body);
-              const store = useCanvasStore.getState();
-              store.addNotification(notification);
-            } catch (e) {
-              console.error('Notification parse error', e);
             }
           })
         );

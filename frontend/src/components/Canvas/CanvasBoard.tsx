@@ -318,6 +318,11 @@ const CanvasBoard: React.FC = () => {
       return;
     }
 
+    if (tool === 'comment') {
+      dragStateRef.current = { ...baseState, type: 'select' };
+      return;
+    }
+
     if (tool === 'freehand') {
       const pts = [{ x: world.x, y: world.y }];
       dragStateRef.current = {
@@ -547,6 +552,28 @@ const CanvasBoard: React.FC = () => {
           if (!hitId) clearSelection();
         }
       }
+    }
+
+    // 评论工具：点击空白处创建评论锚点
+    if (!state.moved && currentTool === 'comment' && canComment && canvasId) {
+      const rect = canvasRef.current!.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      const world = screenToWorld(sx, sy, viewport);
+      commentApi.create(canvasId, {
+        anchorX: world.x,
+        anchorY: world.y,
+      }).then(data => {
+        addComment(data.comment);
+        if (data.replies && data.replies.length > 0) {
+          setCommentReplies(data.comment.id, data.replies);
+        }
+        setOpenCommentId(data.comment.id);
+        setCurrentTool('select');
+      }).catch(e => console.error('Failed to create comment', e));
+      dragStateRef.current = null;
+      setIsDragging(false);
+      return;
     }
 
     if (state.type === 'move' && state.moved && state.originalPositions) {
