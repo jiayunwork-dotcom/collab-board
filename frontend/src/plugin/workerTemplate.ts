@@ -114,11 +114,21 @@ export const WORKER_SANDBOX_TEMPLATE = `
           });
         }
       }
+    } else if (data.type === 'channel:message') {
+      if (typeof PluginAPI._channelHandlers !== 'undefined') {
+        const handlers = PluginAPI._channelHandlers.get(data.channelName);
+        if (handlers) {
+          handlers.forEach((h: any) => {
+            try { h({ channelName: data.channelName, senderPlugin: data.senderPlugin, data: data.data, timestamp: data.timestamp }); } catch (e) { console.error(e); }
+          });
+        }
+      }
     }
   });
 
   const PluginAPI = {
     _eventHandlers: new Map(),
+    _channelHandlers: new Map(),
 
     canvas: {
       getElements: (filter) => _bridgeCall('canvas.getElements', [filter]),
@@ -173,6 +183,41 @@ export const WORKER_SANDBOX_TEMPLATE = `
         handlers.delete(handler);
       }
     },
+
+    channel: {
+      send: (channelName, data) => _bridgeCall('channel.send', [channelName, data]),
+      on: (channelName, handler) => {
+        if (!PluginAPI._channelHandlers.has(channelName)) {
+          PluginAPI._channelHandlers.set(channelName, new Set());
+          _bridgeCall('channel.on', [channelName]);
+        }
+        PluginAPI._channelHandlers.get(channelName).add(handler);
+        return () => {
+          const handlers = PluginAPI._channelHandlers.get(channelName);
+          if (handlers) {
+            handlers.delete(handler);
+            if (handlers.size === 0) {
+              PluginAPI._channelHandlers.delete(channelName);
+              _bridgeCall('channel.off', [channelName]);
+            }
+          }
+        };
+      },
+      off: (channelName, handler) => {
+        const handlers = PluginAPI._channelHandlers.get(channelName);
+        if (handlers) {
+          handlers.delete(handler);
+          if (handlers.size === 0) {
+            PluginAPI._channelHandlers.delete(channelName);
+            _bridgeCall('channel.off', [channelName]);
+          }
+        }
+      },
+    },
+
+    config: {
+      get: (key) => _bridgeCall('config.get', [key]),
+    },
   };
 
   Object.freeze(PluginAPI.canvas);
@@ -180,6 +225,8 @@ export const WORKER_SANDBOX_TEMPLATE = `
   Object.freeze(PluginAPI.notification);
   Object.freeze(PluginAPI.storage);
   Object.freeze(PluginAPI.plugin);
+  Object.freeze(PluginAPI.channel);
+  Object.freeze(PluginAPI.config);
   Object.freeze(PluginAPI);
 
   globalThis.PluginAPI = PluginAPI;

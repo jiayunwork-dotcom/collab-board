@@ -1,5 +1,6 @@
 package com.collabboard.controller;
 
+import com.collabboard.dto.PluginConfigDto;
 import com.collabboard.dto.PluginInstallationDto;
 import com.collabboard.service.PluginService;
 import jakarta.validation.Valid;
@@ -54,5 +55,24 @@ public class PluginController {
         UUID userId = (UUID) authentication.getPrincipal();
         pluginService.uninstallPlugin(canvasId, pluginName, userId);
         return ResponseEntity.noContent().build();
+    }
+
+    @GetMapping("/{pluginName}/config")
+    public ResponseEntity<List<PluginConfigDto>> getPluginConfig(
+            Authentication authentication,
+            @PathVariable UUID canvasId,
+            @PathVariable String pluginName) {
+        UUID userId = (UUID) authentication.getPrincipal();
+        return ResponseEntity.ok(pluginService.getPluginConfig(canvasId, pluginName, userId));
+    }
+
+    @PutMapping("/{pluginName}/config")
+    public ResponseEntity<List<PluginConfigDto>> updatePluginConfig(
+            Authentication authentication,
+            @PathVariable UUID canvasId,
+            @PathVariable String pluginName,
+            @Valid @RequestBody List<PluginConfigDto> configs) {
+        UUID userId = (UUID) authentication.getPrincipal();
+        return ResponseEntity.ok(pluginService.updatePluginConfig(canvasId, pluginName, userId, configs));
     }
 }

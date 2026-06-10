@@ -48,6 +48,33 @@ class SecurityLogger {
     });
   }
 
+  circularDependency(pluginName: string, cycle: string[]): void {
+    this.addEntry({
+      pluginName,
+      type: 'circular_dependency',
+      message: `Circular dependency detected involving plugin '${pluginName}': ${cycle.join(' → ')}`,
+      details: { cycle },
+    });
+  }
+
+  channelViolation(pluginName: string, reason: string): void {
+    this.addEntry({
+      pluginName,
+      type: 'channel_violation',
+      message: `Plugin '${pluginName}' channel violation: ${reason}`,
+      details: { reason },
+    });
+  }
+
+  channelRateLimited(pluginName: string, channelName: string): void {
+    this.addEntry({
+      pluginName,
+      type: 'rate_limited',
+      message: `Plugin '${pluginName}' exceeded channel rate limit (10/s) on '${channelName}'`,
+      details: { channelName },
+    });
+  }
+
   loadError(pluginName: string, error: string): void {
     this.addEntry({
       pluginName,

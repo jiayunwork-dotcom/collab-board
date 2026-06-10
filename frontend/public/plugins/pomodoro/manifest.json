@@ -6,5 +6,21 @@
   "icon": "🍅",
   "category": "效率",
   "permissions": ["notification:send", "canvas:read", "canvas:write", "storage:local"],
-  "entry": "/plugins/pomodoro/index.js"
+  "entry": "/plugins/pomodoro/index.js",
+  "channels": ["timer-notify"],
+  "config": [
+    {
+      "key": "duration",
+      "label": "时长(分钟)",
+      "type": "number",
+      "default": 25
+    },
+    {
+      "key": "autoRestart",
+      "label": "自动重启",
+      "type": "boolean",
+      "default": false
+    }
+  ],
+  "dependencies": []
 }

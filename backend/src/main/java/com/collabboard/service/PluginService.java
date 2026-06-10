@@ -1,13 +1,17 @@
 package com.collabboard.service;
 
+import com.collabboard.dto.PluginConfigDto;
 import com.collabboard.dto.PluginInstallationDto;
+import com.collabboard.entity.PluginConfig;
 import com.collabboard.entity.PluginInstallation;
 import com.collabboard.entity.User;
+import com.collabboard.repository.PluginConfigRepository;
 import com.collabboard.repository.PluginInstallationRepository;
 import com.collabboard.repository.UserRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.OffsetDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -20,13 +24,16 @@ public class PluginService {
     );
 
     private final PluginInstallationRepository pluginRepository;
+    private final PluginConfigRepository pluginConfigRepository;
     private final UserRepository userRepository;
     private final CanvasService canvasService;
 
     public PluginService(PluginInstallationRepository pluginRepository,
+                         PluginConfigRepository pluginConfigRepository,
                          UserRepository userRepository,
                          CanvasService canvasService) {
         this.pluginRepository = pluginRepository;
+        this.pluginConfigRepository = pluginConfigRepository;
         this.userRepository = userRepository;
         this.canvasService = canvasService;
     }
@@ -110,6 +117,51 @@ public class PluginService {
 
     public Set<String> getValidPermissions() {
         return VALID_PERMISSIONS;
+    }
+
+    public List<PluginConfigDto> getPluginConfig(UUID canvasId, String pluginName, UUID requesterId) {
+        canvasService.checkViewPermission(canvasId, requesterId);
+        List<PluginConfig> configs = pluginConfigRepository.findByCanvasIdAndPluginName(canvasId, pluginName);
+        return configs.stream()
+                .map(this::toConfigDto)
+                .toList();
+    }
+
+    @Transactional
+    public List<PluginConfigDto> updatePluginConfig(UUID canvasId, String pluginName, UUID requesterId, List<PluginConfigDto> configs) {
+        canvasService.checkEditPermission(canvasId, requesterId);
+
+        for (PluginConfigDto dto : configs) {
+            Optional<PluginConfig> existing = pluginConfigRepository
+                    .findByCanvasIdAndPluginNameAndConfigKey(canvasId, pluginName, dto.getConfigKey());
+
+            if (existing.isPresent()) {
+                PluginConfig config = existing.get();
+                config.setConfigValue(dto.getConfigValue());
+                config.setUpdatedAt(OffsetDateTime.now());
+                pluginConfigRepository.save(config);
+            } else {
+                PluginConfig config = PluginConfig.builder()
+                        .canvasId(canvasId)
+                        .pluginName(pluginName)
+                        .configKey(dto.getConfigKey())
+                        .configValue(dto.getConfigValue())
+                        .build();
+                pluginConfigRepository.save(config);
+            }
+        }
+
+        List<PluginConfig> updated = pluginConfigRepository.findByCanvasIdAndPluginName(canvasId, pluginName);
+        return updated.stream()
+                .map(this::toConfigDto)
+                .toList();
+    }
+
+    private PluginConfigDto toConfigDto(PluginConfig c) {
+        return PluginConfigDto.builder()
+                .configKey(c.getConfigKey())
+                .configValue(c.getConfigValue())
+                .build();
     }
 
     private PluginInstallationDto toDto(PluginInstallation p, User user) {

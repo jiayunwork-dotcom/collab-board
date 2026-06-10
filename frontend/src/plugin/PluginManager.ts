@@ -6,12 +6,14 @@ import type {
   PluginPermission,
   CanvasEventType,
   BuiltinPluginInfo,
+  PluginConfigField,
 } from '@/types/plugin';
 import { VALID_PERMISSIONS } from '@/types/plugin';
 import { PluginBridge } from './bridge';
 import { buildWorkerCode } from './workerTemplate';
 import { securityLogger } from './securityLogger';
 import { pluginEventBus } from './eventBus';
+import { channelManager } from './channelManager';
 import { pluginApi, type PluginInstallRequest } from '@/api/client';
 import { uid } from '@/utils';
 
@@ -25,6 +27,12 @@ export const BUILTIN_PLUGINS: BuiltinPluginInfo[] = [
     permissions: ['canvas:read', 'canvas:write'],
     entry: '/plugins/auto-ruler/index.js',
     category: '工具',
+    channels: ['ruler-sync'],
+    config: [
+      { key: 'unit', label: '单位', type: 'select', default: 'px', options: ['px', 'rem', 'em'] },
+      { key: 'color', label: '标注颜色', type: 'string', default: '#FF6B6B' },
+    ],
+    dependencies: [],
   },
   {
     name: 'pomodoro',
@@ -35,6 +43,12 @@ export const BUILTIN_PLUGINS: BuiltinPluginInfo[] = [
     permissions: ['notification:send', 'canvas:read'],
     entry: '/plugins/pomodoro/index.js',
     category: '效率',
+    channels: ['timer-notify'],
+    config: [
+      { key: 'duration', label: '时长(分钟)', type: 'number', default: 25 },
+      { key: 'autoRestart', label: '自动重启', type: 'boolean', default: false },
+    ],
+    dependencies: [],
   },
   {
     name: 'word-cloud',
@@ -45,6 +59,10 @@ export const BUILTIN_PLUGINS: BuiltinPluginInfo[] = [
     permissions: ['canvas:read', 'canvas:write'],
     entry: '/plugins/word-cloud/index.js',
     category: '分析',
+    config: [
+      { key: 'maxWords', label: '最大词数', type: 'number', default: 50 },
+    ],
+    dependencies: ['auto-ruler'],
   },
 ];
 
@@ -56,6 +74,7 @@ class PluginManager {
   private installedPlugins: PluginInstallation[] = [];
   private cachedRunningNames: string[] = [];
   private runningNamesDirty = true;
+  private pluginConfigs: Map<string, Record<string, any>> = new Map();
 
   setCanvasId(canvasId: string | null): void {
     this.canvasId = canvasId;
@@ -102,6 +121,148 @@ class PluginManager {
     return this.plugins.get(name)?.status === 'running';
   }
 
+  getPluginConfig(pluginName: string): Record<string, any> {
+    return this.pluginConfigs.get(pluginName) || {};
+  }
+
+  async loadPluginConfig(pluginName: string): Promise<Record<string, any>> {
+    if (!this.canvasId) return {};
+    try {
+      const configs = await pluginApi.getConfig(this.canvasId, pluginName);
+      const configMap: Record<string, any> = {};
+      for (const c of configs) {
+        configMap[c.configKey] = c.configValue;
+      }
+      this.pluginConfigs.set(pluginName, configMap);
+      return configMap;
+    } catch (e) {
+      console.warn('[PluginManager] Failed to load config for', pluginName, e);
+      return {};
+    }
+  }
+
+  async savePluginConfig(pluginName: string, configs: Record<string, any>): Promise<void> {
+    if (!this.canvasId) return;
+    try {
+      const entries = Object.entries(configs).map(([configKey, configValue]) => ({
+        configKey,
+        configValue,
+      }));
+      await pluginApi.updateConfig(this.canvasId, pluginName, entries);
+      this.pluginConfigs.set(pluginName, { ...configs });
+      this.notify();
+    } catch (e: any) {
+      console.error('[PluginManager] Failed to save config for', pluginName, e);
+      throw e;
+    }
+  }
+
+  getConfigGetter(pluginName: string): (key: string) => any {
+    return (key: string) => {
+      const configs = this.pluginConfigs.get(pluginName) || {};
+      if (key in configs) return configs[key];
+      const builtin = BUILTIN_PLUGINS.find(p => p.name === pluginName);
+      const field = builtin?.config?.find(f => f.key === key);
+      return field ? field.default : null;
+    };
+  }
+
+  getMissingDependencies(pluginName: string): string[] {
+    const builtin = BUILTIN_PLUGINS.find(p => p.name === pluginName);
+    if (!builtin?.dependencies || builtin.dependencies.length === 0) return [];
+    return builtin.dependencies.filter(dep => !this.isPluginEnabled(dep));
+  }
+
+  getDependents(pluginName: string): string[] {
+    const dependents: string[] = [];
+    for (const builtin of BUILTIN_PLUGINS) {
+      if (builtin.dependencies?.includes(pluginName) && this.isPluginEnabled(builtin.name)) {
+        dependents.push(builtin.name);
+      }
+    }
+    return dependents;
+  }
+
+  detectCircularDependencies(pluginNames: string[]): string[] | null {
+    const graph = new Map<string, string[]>();
+    for (const name of pluginNames) {
+      const builtin = BUILTIN_PLUGINS.find(p => p.name === name);
+      graph.set(name, builtin?.dependencies?.filter(d => pluginNames.includes(d)) || []);
+    }
+
+    const visited = new Set<string>();
+    const inStack = new Set<string>();
+    const path: string[] = [];
+
+    function dfs(node: string): string[] | null {
+      visited.add(node);
+      inStack.add(node);
+      path.push(node);
+
+      const neighbors = graph.get(node) || [];
+      for (const neighbor of neighbors) {
+        if (inStack.has(neighbor)) {
+          const cycleStart = path.indexOf(neighbor);
+          return path.slice(cycleStart);
+        }
+        if (!visited.has(neighbor)) {
+          const result = dfs(neighbor);
+          if (result) return result;
+        }
+      }
+
+      path.pop();
+      inStack.delete(node);
+      return null;
+    }
+
+    for (const name of pluginNames) {
+      if (!visited.has(name)) {
+        const cycle = dfs(name);
+        if (cycle) return cycle;
+      }
+    }
+
+    return null;
+  }
+
+  topologicalSort(pluginNames: string[]): string[] {
+    const graph = new Map<string, string[]>();
+    const inDegree = new Map<string, number>();
+
+    for (const name of pluginNames) {
+      graph.set(name, []);
+      inDegree.set(name, 0);
+    }
+
+    for (const name of pluginNames) {
+      const builtin = BUILTIN_PLUGINS.find(p => p.name === name);
+      const deps = builtin?.dependencies?.filter(d => pluginNames.includes(d)) || [];
+      for (const dep of deps) {
+        graph.get(dep)!.push(name);
+        inDegree.set(name, (inDegree.get(name) || 0) + 1);
+      }
+    }
+
+    const queue: string[] = [];
+    for (const [name, degree] of inDegree) {
+      if (degree === 0) queue.push(name);
+    }
+
+    const result: string[] = [];
+    while (queue.length > 0) {
+      const node = queue.shift()!;
+      result.push(node);
+      for (const neighbor of graph.get(node) || []) {
+        const newDegree = (inDegree.get(neighbor) || 1) - 1;
+        inDegree.set(neighbor, newDegree);
+        if (newDegree === 0) queue.push(neighbor);
+      }
+    }
+
+    return result;
+  }
+
   subscribe(callback: () => void): () => void {
     this.listeners.add(callback);
     return () => this.listeners.delete(callback);
@@ -144,6 +305,49 @@ class PluginManager {
       throw new Error('Manifest entry is required');
     }
 
+    if (manifest.channels !== undefined) {
+      if (!Array.isArray(manifest.channels)) {
+        throw new Error('Manifest channels must be an array');
+      }
+      for (const ch of manifest.channels) {
+        if (typeof ch !== 'string' || !/^[a-zA-Z0-9-]{1,32}$/.test(ch)) {
+          throw new Error(`Invalid channel name: ${ch}`);
+        }
+      }
+    }
+
+    if (manifest.config !== undefined) {
+      if (!Array.isArray(manifest.config)) {
+        throw new Error('Manifest config must be an array');
+      }
+      const validTypes = ['string', 'number', 'boolean', 'select'];
+      for (const field of manifest.config) {
+        if (!field.key || typeof field.key !== 'string') {
+          throw new Error('Config field key is required');
+        }
+        if (!field.label || typeof field.label !== 'string') {
+          throw new Error('Config field label is required');
+        }
+        if (!validTypes.includes(field.type)) {
+          throw new Error(`Invalid config type: ${field.type}`);
+        }
+        if (field.type === 'select' && (!Array.isArray(field.options) || field.options.length === 0)) {
+          throw new Error(`Config field '${field.key}' of type 'select' must have options array`);
+        }
+      }
+    }
+
+    if (manifest.dependencies !== undefined) {
+      if (!Array.isArray(manifest.dependencies)) {
+        throw new Error('Manifest dependencies must be an array');
+      }
+      for (const dep of manifest.dependencies) {
+        if (typeof dep !== 'string' || !dep) {
+          throw new Error('Dependency name must be a non-empty string');
+        }
+      }
+    }
+
     return manifest as PluginManifest;
   }
 
@@ -154,13 +358,25 @@ class PluginManager {
       const plugins = await pluginApi.list(this.canvasId);
       this.installedPlugins = plugins;
 
-      for (const p of plugins) {
-        if (p.enabled) {
-          try {
-            await this.loadAndRunPlugin(p.pluginName);
-          } catch (e: any) {
-            securityLogger.loadError(p.pluginName, e.message);
-          }
+      const enabledPlugins = plugins.filter(p => p.enabled);
+      const enabledNames = enabledPlugins.map(p => p.pluginName);
+
+      const cycle = this.detectCircularDependencies(enabledNames);
+      if (cycle) {
+        securityLogger.circularDependency(cycle[0], cycle);
+        console.error('[PluginManager] Circular dependency detected:', cycle.join(' → '));
+        this.notify();
+        return;
+      }
+
+      const sortedNames = this.topologicalSort(enabledNames);
+
+      for (const name of sortedNames) {
+        try {
+          await this.loadPluginConfig(name);
+          await this.loadAndRunPlugin(name);
+        } catch (e: any) {
+          securityLogger.loadError(name, e.message);
         }
       }
       this.notify();
@@ -203,10 +419,17 @@ class PluginManager {
   async uninstallPlugin(name: string): Promise<void> {
     if (!this.canvasId) throw new Error('Canvas not loaded');
 
+    const dependents = this.getDependents(name);
+    if (dependents.length > 0) {
+      throw new Error(`以下插件依赖此插件: ${dependents.join(', ')}。请先禁用或卸载这些插件。`);
+    }
+
     this.stopPlugin(name);
+    channelManager.unsubscribeAll(name);
 
     await pluginApi.uninstall(this.canvasId, name);
     this.installedPlugins = this.installedPlugins.filter(p => p.pluginName !== name);
+    this.pluginConfigs.delete(name);
 
     this.notify();
   }
@@ -217,12 +440,25 @@ class PluginManager {
     const installed = this.installedPlugins.find(p => p.pluginName === name);
     if (!installed) throw new Error(`Plugin not installed: ${name}`);
 
+    if (!installed.enabled) {
+      const missing = this.getMissingDependencies(name);
+      if (missing.length > 0) {
+        throw new Error(`缺少依赖插件: ${missing.join(', ')}。请先启用这些插件。`);
+      }
+    }
+
     await pluginApi.toggle(this.canvasId, name);
 
     if (installed.enabled) {
+      const dependents = this.getDependents(name);
+      if (dependents.length > 0) {
+        throw new Error(`以下插件依赖此插件: ${dependents.join(', ')}。请先禁用这些插件。`);
+      }
       this.stopPlugin(name);
+      channelManager.unsubscribeAll(name);
     } else {
       try {
+        await this.loadPluginConfig(name);
         await this.loadAndRunPlugin(name);
       } catch (e: any) {
         securityLogger.loadError(name, e.message);
@@ -305,7 +541,7 @@ class PluginManager {
 
     const bridge = new PluginBridge(manifest, worker, () => {
       this.bridges.delete(name);
-    });
+    }, this.getConfigGetter(name));
 
     this.bridges.set(name, bridge);
 
@@ -328,6 +564,7 @@ class PluginManager {
     }
     this.bridges.delete(name);
     pluginEventBus.unsubscribeAll(name);
+    channelManager.unsubscribeAll(name);
 
     const runtime = this.plugins.get(name);
     if (runtime) {

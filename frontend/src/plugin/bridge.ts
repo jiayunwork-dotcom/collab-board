@@ -5,11 +5,13 @@ import type {
   BridgeMethod,
   PluginPermission,
   CanvasEventType,
+  ChannelMessage,
 } from '@/types/plugin';
 import { PERMISSION_MAP } from '@/types/plugin';
 import { securityLogger } from './securityLogger';
 import { pluginStorage } from './PluginStorage';
 import { pluginEventBus } from './eventBus';
+import { channelManager } from './channelManager';
 import { useCanvasStore } from '@/store/canvasStore';
 import { uid } from '@/utils';
 import type { CanvasElement, ElementType } from '@/types';
@@ -28,12 +30,14 @@ export class PluginBridge {
   private pendingRequests: Map<string, { resolve: (r: any) => void; reject: (e: Error) => void }> = new Map();
   private rateLimitTrackers: Map<string, RateLimitTracker> = new Map();
   private destroyCallback?: () => void;
+  private configGetter?: (key: string) => any;
 
-  constructor(manifest: PluginManifest, worker: Worker, onDestroy?: () => void) {
+  constructor(manifest: PluginManifest, worker: Worker, onDestroy?: () => void, configGetter?: (key: string) => any) {
     this.manifest = manifest;
     this.pluginName = manifest.name;
     this.worker = worker;
     this.destroyCallback = onDestroy;
+    this.configGetter = configGetter;
 
     this.worker.onmessage = (e: MessageEvent) => this.handleMessage(e.data);
     this.worker.onerror = (e) => {
@@ -57,6 +61,7 @@ export class PluginBridge {
   destroy(): void {
     try {
       pluginEventBus.unsubscribeAll(this.pluginName);
+      channelManager.unsubscribeAll(this.pluginName);
       this.worker.terminate();
       this.pendingRequests.clear();
       this.rateLimitTrackers.clear();
@@ -309,6 +314,54 @@ export class PluginBridge {
       case 'event.unsubscribe': {
         const [event] = params;
         return pluginEventBus.unsubscribe(this.pluginName, event as CanvasEventType);
+      }
+
+      case 'channel.send': {
+        const [channelName, data] = params;
+        if (typeof channelName !== 'string') throw new Error('Channel name must be a string');
+        const declaredChannels = this.manifest.channels || [];
+        const success = channelManager.send(this.pluginName, channelName, data, declaredChannels);
+        if (!success) {
+          throw { message: 'Channel send denied', code: 'channel_denied' };
+        }
+        return success;
+      }
+
+      case 'channel.on': {
+        const [channelName, callbackId] = params;
+        if (typeof channelName !== 'string') throw new Error('Channel name must be a string');
+        const callback = (message: ChannelMessage) => {
+          try {
+            this.worker.postMessage({
+              type: 'channel:message',
+              channelName: message.channelName,
+              senderPlugin: message.senderPlugin,
+              data: message.data,
+              timestamp: message.timestamp,
+            });
+          } catch (e) {
+            console.error(`[PluginBridge] Failed to send channel message to '${this.pluginName}':`, e);
+          }
+        };
+        channelManager.on(this.pluginName, channelName, callback);
+        return true;
+      }
+
+      case 'channel.off': {
+        const [channelName] = params;
+        if (typeof channelName !== 'string') throw new Error('Channel name must be a string');
+        return channelManager.off(this.pluginName, channelName);
+      }
+
+      case 'config.get': {
+        const [key] = params;
+        if (typeof key !== 'string') throw new Error('Config key must be a string');
+        if (this.configGetter) {
+          return this.configGetter(key);
+        }
+        const configFields = this.manifest.config || [];
+        const field = configFields.find(f => f.key === key);
+        return field ? field.default : null;
       }
 
       default:

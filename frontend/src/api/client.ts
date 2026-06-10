@@ -192,6 +192,10 @@ export const pluginApi = {
     client.put(`/canvases/${canvasId}/plugins/${name}/toggle`).then(r => r.data),
   uninstall: (canvasId: string, name: string): Promise<void> =>
     client.delete(`/canvases/${canvasId}/plugins/${name}`),
+  getConfig: (canvasId: string, pluginName: string): Promise<Array<{configKey: string; configValue: any}>> =>
+    client.get(`/canvases/${canvasId}/plugins/${pluginName}/config`).then(r => r.data),
+  updateConfig: (canvasId: string, pluginName: string, configs: Array<{configKey: string; configValue: any}>): Promise<Array<{configKey: string; configValue: any}>> =>
+    client.put(`/canvases/${canvasId}/plugins/${pluginName}/config`, configs).then(r => r.data),
 };
 
 export default client;

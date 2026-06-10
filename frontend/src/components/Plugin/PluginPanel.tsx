@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
 import { pluginManager, BUILTIN_PLUGINS } from '@/plugin/PluginManager';
 import { securityLogger } from '@/plugin/securityLogger';
-import type { PluginInstallation, SecurityLogEntry, PluginPermission, BuiltinPluginInfo } from '@/types/plugin';
+import type { PluginInstallation, SecurityLogEntry, PluginPermission, BuiltinPluginInfo, PluginConfigField } from '@/types/plugin';
 
 type SubTab = 'installed' | 'discover' | 'logs';
 
@@ -19,6 +19,8 @@ const PluginPanel: React.FC = () => {
   const [installing, setInstalling] = useState<string | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
   const [uninstalling, setUninstalling] = useState<string | null>(null);
+  const [pendingConfigs, setPendingConfigs] = useState<Record<string, Record<string, any>>>({});
+  const [savingConfig, setSavingConfig] = useState<string | null>(null);
 
   const subscribePluginManager = useCallback((cb: () => void) => {
     return pluginManager.subscribe(cb);
@@ -50,6 +52,14 @@ const PluginPanel: React.FC = () => {
   };
 
   const handleToggle = async (name: string) => {
+    const installed = pluginManager.getInstalledPlugins().find(p => p.pluginName === name);
+    if (installed && !installed.enabled) {
+      const missing = pluginManager.getMissingDependencies(name);
+      if (missing.length > 0) {
+        alert(`无法启用：缺少依赖插件 ${missing.join('、')}，请先启用这些插件。`);
+        return;
+      }
+    }
     setToggling(name);
     try {
       await pluginManager.togglePlugin(name);
@@ -61,6 +71,12 @@ const PluginPanel: React.FC = () => {
   };
 
   const handleUninstall = async (name: string) => {
+    const dependents = pluginManager.getDependents(name);
+    if (dependents.length > 0) {
+      if (!confirm(`以下插件依赖此插件：${dependents.join('、')}。卸载后这些插件可能无法正常工作，确定继续？`)) {
+        return;
+      }
+    }
     if (!confirm(`确定要卸载插件 "${name}" 吗？此操作会同时移除插件的本地存储数据。`)) {
       return;
     }
@@ -95,6 +111,8 @@ const PluginPanel: React.FC = () => {
     rate_limited: 'bg-amber-50 text-amber-700 border-amber-200',
     unsafe_api: 'bg-red-50 text-red-700 border-red-200',
     load_error: 'bg-orange-50 text-orange-700 border-orange-200',
+    circular_dependency: 'bg-purple-50 text-purple-700 border-purple-200',
+    channel_violation: 'bg-amber-50 text-amber-700 border-amber-200',
   };
 
   const logTypeLabel: Record<SecurityLogEntry['type'], string> = {
@@ -102,6 +120,8 @@ const PluginPanel: React.FC = () => {
     rate_limited: '限频触发',
     unsafe_api: '危险API',
     load_error: '加载错误',
+    circular_dependency: '循环依赖',
+    channel_violation: '频道违规',
   };
 
   const installedMap = new Map(installed.map(p => [p.pluginName, p]));
@@ -236,7 +256,20 @@ const PluginPanel: React.FC = () => {
                     </div>
                   </div>
 
-                  {isExpanded && (
+                  {isExpanded && (() => {
+                    const pluginBuiltin = BUILTIN_PLUGINS.find(b => b.name === inst.pluginName);
+                    const configFields = pluginBuiltin?.config || [];
+                    const currentConfig = pendingConfigs[inst.pluginName] ?? (() => {
+                      const saved = pluginManager.getPluginConfig(inst.pluginName);
+                      const initial: Record<string, any> = {};
+                      for (const field of configFields) {
+                        initial[field.key] = field.key in saved ? saved[field.key] : field.default;
+                      }
+                      return initial;
+                    })();
+                    const deps = pluginBuiltin?.dependencies || [];
+                    const dependents = pluginManager.getDependents(inst.pluginName);
+                    return (
                     <div className="px-3 pb-3 bg-slate-50/50 border-t border-slate-100">
                       <div className="pt-3">
                         <div className="text-xs font-semibold text-slate-600 mb-2">已授权权限</div>
@@ -261,8 +294,137 @@ const PluginPanel: React.FC = () => {
                           </div>
                         )}
                       </div>
+
+                      {configFields.length > 0 && (
+                        <div className="mt-3 pt-3 border-t border-slate-100">
+                          <div className="text-xs font-semibold text-slate-600 mb-2">配置</div>
+                          <div className="space-y-2">
+                            {configFields.map(field => (
+                              <div key={field.key}>
+                                <label className="block text-[11px] text-slate-500 mb-1">{field.label}</label>
+                                {field.type === 'boolean' ? (
+                                  <label className="inline-flex items-center gap-2 cursor-pointer">
+                                    <div className={`relative w-9 h-5 rounded-full transition-colors ${
+                                      currentConfig[field.key] ? 'bg-indigo-600' : 'bg-slate-300'
+                                    }`}>
+                                      <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                                        currentConfig[field.key] ? 'translate-x-4' : 'translate-x-0.5'
+                                      }`} />
+                                    </div>
+                                    <input
+                                      type="checkbox"
+                                      className="sr-only"
+                                      checked={!!currentConfig[field.key]}
+                                      onChange={(e) => {
+                                        const next = { ...currentConfig, [field.key]: e.target.checked };
+                                        setPendingConfigs(prev => ({ ...prev, [inst.pluginName]: next }));
+                                      }}
+                                    />
+                                    <span className="text-xs text-slate-600">
+                                      {currentConfig[field.key] ? '是' : '否'}
+                                    </span>
+                                  </label>
+                                ) : field.type === 'select' ? (
+                                  <select
+                                    className="w-full text-xs border border-slate-200 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                    value={currentConfig[field.key] ?? field.default}
+                                    onChange={(e) => {
+                                      const next = { ...currentConfig, [field.key]: e.target.value };
+                                      setPendingConfigs(prev => ({ ...prev, [inst.pluginName]: next }));
+                                    }}
+                                  >
+                                    {field.options?.map(opt => (
+                                      <option key={opt} value={opt}>{opt}</option>
+                                    ))}
+                                  </select>
+                                ) : field.type === 'number' ? (
+                                  <input
+                                    type="number"
+                                    className="w-full text-xs border border-slate-200 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                    value={currentConfig[field.key] ?? field.default}
+                                    onChange={(e) => {
+                                      const next = { ...currentConfig, [field.key]: Number(e.target.value) };
+                                      setPendingConfigs(prev => ({ ...prev, [inst.pluginName]: next }));
+                                    }}
+                                  />
+                                ) : (
+                                  <input
+                                    type="text"
+                                    className="w-full text-xs border border-slate-200 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                    value={currentConfig[field.key] ?? field.default}
+                                    onChange={(e) => {
+                                      const next = { ...currentConfig, [field.key]: e.target.value };
+                                      setPendingConfigs(prev => ({ ...prev, [inst.pluginName]: next }));
+                                    }}
+                                  />
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                          <button
+                            className="mt-2 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md px-3 py-1.5 transition-colors disabled:opacity-50"
+                            disabled={savingConfig === inst.pluginName}
+                            onClick={async () => {
+                              setSavingConfig(inst.pluginName);
+                              try {
+                                await pluginManager.savePluginConfig(inst.pluginName, pendingConfigs[inst.pluginName] || {});
+                              } catch (e: any) {
+                                alert('保存配置失败：' + (e.message || '未知错误'));
+                              } finally {
+                                setSavingConfig(null);
+                              }
+                            }}
+                          >
+                            {savingConfig === inst.pluginName ? '保存中...' : '保存配置'}
+                          </button>
+                        </div>
+                      )}
+
+                      {(deps.length > 0 || dependents.length > 0) && (
+                        <div className="mt-3 pt-3 border-t border-slate-100">
+                          <div className="text-xs font-semibold text-slate-600 mb-2">依赖</div>
+                          {deps.length > 0 && (
+                            <div className="mb-2">
+                              <div className="text-[11px] text-slate-500 mb-1">依赖插件</div>
+                              <div className="flex flex-wrap gap-1.5">
+                                {deps.map(dep => {
+                                  const depEnabled = pluginManager.isPluginEnabled(dep);
+                                  return (
+                                    <span
+                                      key={dep}
+                                      className={`text-[11px] px-2 py-0.5 rounded border ${
+                                        depEnabled
+                                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                          : 'bg-rose-50 text-rose-700 border-rose-200'
+                                      }`}
+                                    >
+                                      {depEnabled ? '✓' : '✗'} {dep}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                          {dependents.length > 0 && (
+                            <div>
+                              <div className="text-[11px] text-slate-500 mb-1">被依赖</div>
+                              <div className="flex flex-wrap gap-1.5">
+                                {dependents.map(dep => (
+                                  <span
+                                    key={dep}
+                                    className="text-[11px] px-2 py-0.5 rounded border bg-blue-50 text-blue-700 border-blue-200"
+                                  >
+                                    {dep}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
-                  )}
+                    );
+                  })()}
                 </div>
               );
             })

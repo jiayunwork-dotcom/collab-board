@@ -13,6 +13,14 @@ export const VALID_PERMISSIONS: PluginPermission[] = [
   'storage:local',
 ];
 
+export interface PluginConfigField {
+  key: string;
+  label: string;
+  type: 'string' | 'number' | 'boolean' | 'select';
+  default: any;
+  options?: string[];
+}
+
 export interface PluginManifest {
   name: string;
   version: string;
@@ -22,6 +30,9 @@ export interface PluginManifest {
   permissions: PluginPermission[];
   entry: string;
   category?: string;
+  channels?: string[];
+  config?: PluginConfigField[];
+  dependencies?: string[];
 }
 
 export type PluginStatus =
@@ -66,7 +77,7 @@ export interface SecurityLogEntry {
   id: string;
   timestamp: number;
   pluginName: string;
-  type: 'permission_denied' | 'rate_limited' | 'unsafe_api' | 'load_error';
+  type: 'permission_denied' | 'rate_limited' | 'unsafe_api' | 'load_error' | 'circular_dependency' | 'channel_violation';
   message: string;
   details?: Record<string, any>;
 }
@@ -80,6 +91,9 @@ export interface BuiltinPluginInfo {
   permissions: PluginPermission[];
   entry: string;
   category: string;
+  channels?: string[];
+  config?: PluginConfigField[];
+  dependencies?: string[];
 }
 
 export interface RateLimitState {
@@ -100,7 +114,11 @@ export type BridgeMethod =
   | 'storage.set'
   | 'plugin.getManifest'
   | 'event.subscribe'
-  | 'event.unsubscribe';
+  | 'event.unsubscribe'
+  | 'channel.send'
+  | 'channel.on'
+  | 'channel.off'
+  | 'config.get';
 
 export const PERMISSION_MAP: Record<BridgeMethod, PluginPermission | null> = {
   'canvas.getElements': 'canvas:read',
@@ -116,6 +134,10 @@ export const PERMISSION_MAP: Record<BridgeMethod, PluginPermission | null> = {
   'plugin.getManifest': null,
   'event.subscribe': null,
   'event.unsubscribe': null,
+  'channel.send': null,
+  'channel.on': null,
+  'channel.off': null,
+  'config.get': null,
 };
 
 export interface BridgeRequest {
@@ -136,4 +158,16 @@ export interface EventBroadcast {
   type: 'event';
   event: CanvasEventType;
   payload: any;
+}
+
+export interface ChannelMessage {
+  channelName: string;
+  senderPlugin: string;
+  data: any;
+  timestamp: number;
+}
+
+export interface PluginConfigEntry {
+  key: string;
+  value: any;
 }
