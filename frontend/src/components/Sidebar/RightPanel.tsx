@@ -230,12 +230,19 @@ const RightPanel: React.FC = () => {
       setDraggingId(null);
       return;
     }
-    const dropZ = targetEl.zIndex;
+    const dropZ = (targetEl.zIndex ?? 0);
     syncUpdate(draggingId, { zIndex: dropZ + 0.5 });
     setTimeout(() => {
-      const newSorted = [...elements.values()].sort((a, b) => a.zIndex - b.zIndex);
+      const state = useCanvasStore.getState();
+      const curEls = Array.from(state.elements.values());
+      const newSorted = curEls.sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0));
       newSorted.forEach((el, i) => {
-        updateElement(el.id, { zIndex: i });
+        state.updateElement(el.id, { zIndex: i });
+        if (canvasId) {
+          const payload: Partial<CanvasElement> = { id: el.id, zIndex: i };
+          elementApi.update(canvasId, el.id, { zIndex: i }).catch(() => {});
+          collabClient.sendOperation('UPDATE_ELEMENT', payload);
+        }
       });
     }, 10);
     setDraggingId(null);

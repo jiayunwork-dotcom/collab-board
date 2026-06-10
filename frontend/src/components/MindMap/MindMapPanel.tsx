@@ -409,6 +409,11 @@ export const MindMapPanel: React.FC<MindMapPanelProps> = ({ onClose }) => {
     }
   }, [panelMode, layoutMode, setLayoutMode]);
 
+  useEffect(() => {
+    const t = setTimeout(() => relayout(), 0);
+    return () => clearTimeout(t);
+  }, [panelMode, relayout]);
+
   const TreeView: React.FC<{ nodes: MindNode[]; depth?: number }> = ({ nodes, depth = 0 }) => (
     <div style={{
       display: 'flex', flexDirection: 'column',

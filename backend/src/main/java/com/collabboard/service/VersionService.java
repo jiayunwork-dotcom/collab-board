@@ -140,14 +140,22 @@ public class VersionService {
             if (elementsObj instanceof List<?> list) {
                 List<CanvasElementDto> elementDtos = objectMapper.convertValue(
                         list, new TypeReference<List<CanvasElementDto>>() {});
+                Set<UUID> restoredIds = new HashSet<>();
+                Map<UUID, UUID> idToParent = new HashMap<>();
                 int z = 1;
                 for (CanvasElementDto dto : elementDtos) {
+                    UUID elId = dto.getId() != null ? dto.getId() : UUID.randomUUID();
+                    restoredIds.add(elId);
+                    if (dto.getParentId() != null) {
+                        idToParent.put(elId, dto.getParentId());
+                    }
                     Map<String, Object> vv = new HashMap<>();
                     vv.put(userId.toString(), System.currentTimeMillis());
 
                     CanvasElement el = CanvasElement.builder()
+                            .id(elId)
                             .canvasId(canvasId)
-                            .parentId(dto.getParentId())
+                            .parentId(null)
                             .type(dto.getType())
                             .x(dto.getX() != null ? dto.getX() : 0.0)
                             .y(dto.getY() != null ? dto.getY() : 0.0)
@@ -166,6 +174,20 @@ public class VersionService {
                             .build();
                     elementRepository.save(el);
                 }
+                if (!idToParent.isEmpty()) {
+                    elementRepository.flush();
+                    for (Map.Entry<UUID, UUID> e : idToParent.entrySet()) {
+                        UUID childId = e.getKey();
+                        UUID pId = e.getValue();
+                        if (restoredIds.contains(pId)) {
+                            elementRepository.findById(childId).ifPresent(child -> {
+                                child.setParentId(pId);
+                                elementRepository.save(child);
+                            });
+                        }
+                    }
+                    elementRepository.flush();
+                }
             }
 
             Object connectionsObj = snapshot.get("connections");
@@ -173,10 +195,12 @@ public class VersionService {
                 List<CanvasConnectionDto> connDtos = objectMapper.convertValue(
                         list, new TypeReference<List<CanvasConnectionDto>>() {});
                 for (CanvasConnectionDto dto : connDtos) {
+                    UUID connId = dto.getId() != null ? dto.getId() : UUID.randomUUID();
                     Map<String, Object> vv = new HashMap<>();
                     vv.put(userId.toString(), System.currentTimeMillis());
 
                     CanvasConnection conn = CanvasConnection.builder()
+                            .id(connId)
                             .canvasId(canvasId)
                             .fromElementId(dto.getFromElementId())
                             .toElementId(dto.getToElementId())
@@ -191,7 +215,10 @@ public class VersionService {
                             .zIndex(dto.getZIndex() != null ? dto.getZIndex() : 0)
                             .versionVector(vv)
                             .build();
-                    connectionRepository.save(conn);
+                    try {
+                        connectionRepository.save(conn);
+                    } catch (Exception ex) {
+                    }
                 }
             }
         }
